@@ -5,6 +5,8 @@ from pathlib import Path
 from datetime import date
 import calendar
 
+from forecast import forecast as run_forecast, payment_state
+
 BASE = Path.home() / "BudgetPilot"
 DATA = BASE / "data"
 SETTINGS = DATA / "settings.json"
@@ -111,6 +113,8 @@ def calc_month(year, month):
     expense_total = sum(float(e["amount"]) for e in expense_items)
     planned_month_balance = income_total - payment_total - expense_total
 
+    next_income = next_income_date_all(incomes)
+
     future_income = 0
     future_required = 0
 
@@ -119,15 +123,18 @@ def calc_month(year, month):
             if due_date(i, year, month) > TODAY:
                 future_income += float(i["amount"])
 
-        for p in payment_items:
-            if due_date(p, year, month) >= TODAY:
-                future_required += float(p["amount"])
+        upcoming_payments = [
+            {**p, "due_date": due_date(p, year, month)}
+            for p in payment_items
+            if due_date(p, year, month) >= TODAY
+        ]
+        fc = run_forecast(account_balance, upcoming_payments, TODAY, next_income)
+        future_required = fc["required_main"]
 
         real_available = account_balance + future_income - future_required - expense_total
     else:
         real_available = planned_month_balance
 
-    next_income = next_income_date_all(incomes)
     days_to_income = max((next_income - TODAY).days, 0) if next_income else None
 
     usable_money = real_available - safe_min if is_current_month else real_available
