@@ -9,6 +9,7 @@ from flask import Flask, request, redirect, render_template_string
 import obligations as ob
 import receipts
 import payment_events as pe
+import envelopes as env
 from forecast import payment_state, PENDING, PAID_ME, PAID_OTHER, PAID_RESERVE, DEFERRED
 
 BASE = Path.home() / "BudgetPilot"
@@ -18,6 +19,7 @@ INCOMES = DATA / "incomes.json"
 PAYMENTS = DATA / "payments.json"
 EXPENSES = DATA / "expenses.json"
 SNAPSHOTS = DATA / "snapshots.json"
+ENVELOPES = DATA / "envelopes.json"
 
 DATA.mkdir(parents=True, exist_ok=True)
 app = Flask(__name__)
@@ -199,7 +201,7 @@ details.card summary{cursor:pointer;font-size:20px;font-weight:700}
 <a href="#payments">Platby</a>
 <a href="#expenses">Výdavky</a>
 <a href="#settings">Nastavenia</a>
-<span class="navlink disabled">Obálky (čoskoro)</span>
+<a href="#envelopes">Obálky</a>
 <span class="navlink disabled">Dlhy (čoskoro)</span>
 <span class="navlink disabled">Kalendár (čoskoro)</span>
 </nav>
@@ -292,6 +294,17 @@ details.card summary{cursor:pointer;font-size:20px;font-weight:700}
 <button>{% if edit_expense is not none %}Uložiť úpravu{% else %}Pridať výdavok{% endif %}</button>
 {% if edit_expense is not none %}<a href="/"><button type="button" class="secondary">Zrušiť</button></a>{% endif %}
 </div>
+</form>
+</div>
+
+<div class="card">
+<h2>Obálka (mesačný limit)</h2>
+<form method="post" action="/envelope/add">
+<label>Kategória</label>
+<select name="category">{% for t in expense_types %}<option>{{t}}</option>{% endfor %}</select>
+<label>Mesačný limit</label><input name="monthly_limit" placeholder="napr. 200">
+<div class="small">Ak už na túto kategóriu obálka existuje, uloženie iba prepíše jej limit.</div>
+<div class="btn-row"><button>Uložiť obálku</button></div>
 </form>
 </div>
 </aside>
@@ -430,6 +443,32 @@ details.card summary{cursor:pointer;font-size:20px;font-weight:700}
 </div>
 </div>
 
+<div class="card section" id="envelopes">
+<h2>Obálky (mesačný rozpočet po kategóriách)</h2>
+{% if envelope_rows %}
+<div class="table-scroll">
+<table><tr><th>Kategória</th><th>Limit</th><th>Minuté</th><th>Zostáva</th><th>Priemer/mesiac</th><th></th></tr>
+{% for r in envelope_rows %}
+<tr>
+<td>{{r.category}}</td>
+<td>{{"%.2f"|format(r.monthly_limit)}} €</td>
+<td>{{"%.2f"|format(r.spent)}} €</td>
+<td class="{% if r.over_budget %}bad{% else %}ok{% endif %}">{{"%.2f"|format(r.remaining)}} €</td>
+<td class="small">{{"%.2f"|format(r.avg_3m)}} €</td>
+<td class="actions">
+<form method="post" action="/envelope/delete/{{loop.index0}}"><button class="danger">Zmazať</button></form>
+</td>
+</tr>
+{% endfor %}
+<tr><td><strong>Spolu</strong></td><td><strong>{{"%.2f"|format(envelope_totals.total_limit)}} €</strong></td>
+<td><strong>{{"%.2f"|format(envelope_totals.total_spent)}} €</strong></td>
+<td class="{% if envelope_totals.total_remaining < 0 %}bad{% else %}ok{% endif %}"><strong>{{"%.2f"|format(envelope_totals.total_remaining)}} €</strong></td>
+<td></td><td></td></tr>
+</table>
+</div>
+{% else %}<div class="small">Zatiaľ žiadna obálka. Pridaj limit pre kategóriu vľavo.</div>{% endif %}
+</div>
+
 <details class="card">
 <summary>Technický výstup</summary>
 <pre>{{core}}</pre>
@@ -473,6 +512,14 @@ def render_page(edit_income=None, edit_payment=None, edit_expense=None):
     ]
     groups = pe.group_payments_by_status(active_resolved, today)
 
+    envelope_defs = load(ENVELOPES, [])
+    expenses_this_month = env.expenses_in_month(expenses, today.year, today.month)
+    envelope_totals = env.envelopes_summary(envelope_defs, expenses_this_month)
+    envelope_rows = [
+        {**row, "avg_3m": env.average_monthly_spend(expenses, row["category"], 3, today)}
+        for row in envelope_totals["rows"]
+    ]
+
     dash = parse_dash(core)
     summary = {
         "balance": dash["balance"],
@@ -510,7 +557,8 @@ def render_page(edit_income=None, edit_payment=None, edit_expense=None):
         income_form=income_form, payment_form=payment_form, expense_form=expense_form,
         setup_needed=setup_needed,
         state_label=STATE_LABEL,
-        state_badge_class=STATE_BADGE_CLASS, selectable_states=SELECTABLE_STATES
+        state_badge_class=STATE_BADGE_CLASS, selectable_states=SELECTABLE_STATES,
+        envelope_rows=envelope_rows, envelope_totals=envelope_totals,
     )
 
 @app.route("/")
@@ -670,6 +718,29 @@ def expense_delete(i):
     data = load(EXPENSES, [])
     if i < len(data): data.pop(i)
     save(EXPENSES, data)
+    return go_home()
+
+@app.post("/envelope/add")
+def envelope_add():
+    category = request.form.get("category", "").strip()
+    limit_raw = request.form.get("monthly_limit", "").strip()
+    if category and limit_raw:
+        data = load(ENVELOPES, [])
+        limit = float(limit_raw)
+        for e in data:
+            if e.get("category") == category:
+                e["monthly_limit"] = limit
+                break
+        else:
+            data.append({"category": category, "monthly_limit": limit})
+        save(ENVELOPES, data)
+    return go_home()
+
+@app.post("/envelope/delete/<int:i>")
+def envelope_delete(i):
+    data = load(ENVELOPES, [])
+    if i < len(data): data.pop(i)
+    save(ENVELOPES, data)
     return go_home()
 
 SETUP_HTML = """

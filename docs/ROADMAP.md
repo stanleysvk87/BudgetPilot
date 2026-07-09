@@ -4,6 +4,12 @@
 
 - Pure forecast engine with a 5-state payment model
   (`pending`/`paid_me`/`paid_other`/`paid_reserve`/`deferred`)
+- Current-vs-projected cashflow split: `safe_to_spend_now` never includes
+  future income, `projected_after_payday` is the separate, clearly labeled
+  figure that does
+- Categories / envelopes — monthly budget per category vs. actual spend vs.
+  remaining, plus a 3-month historical average per category
+  (`envelopes.py`)
 - Recurring obligations, one-time obligations (pure helpers), and debts
   (pure helpers)
 - First-run setup flow (`/setup`): real balance, payday day, add/cancel
@@ -20,12 +26,6 @@
 
 ## Next up
 
-- **Manual expenses UI polish** — categories/envelopes (see below) are the
-  main gap; expense CRUD itself already works.
-- **Categories / envelopes** — planned monthly budget per category (food,
-  fuel, children, pharmacy, household, car, school, subscriptions,
-  restaurant, other) vs. actual spend vs. remaining, plus historical
-  monthly averages. Data model and UI both still to be designed.
 - **Debts / borrowed money UI** — `obligations.py` already has the pure
   logic (`debt_to_payment()`, `I_owe` / `owed_to_me`); no dashboard surface
   yet.

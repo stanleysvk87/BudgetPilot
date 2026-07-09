@@ -19,6 +19,7 @@ sys.path.insert(0, str(ROOT))
 
 from forecast import forecast, payment_state, current_cash_position, VALID_STATES
 import obligations as ob
+import envelopes as env
 from payment_events import apply_payment_events
 
 DATA = ROOT / "data"
@@ -155,6 +156,29 @@ class DemoDashboardCurrentPositionTests(unittest.TestCase):
         self.assertEqual(position["shortfall_before_payday"], -932)
         # It only shows up in the separately labeled projection.
         self.assertEqual(projected_after_payday, 963)
+
+
+class DemoEnvelopesTests(unittest.TestCase):
+    """data/envelopes.json + data/expenses.json (demo: Nafta 45, Potraviny
+    60, both in July) — pins the numbers so a future data reset notices if
+    the categories drift out of sync with the demo expenses."""
+
+    def setUp(self):
+        self.envelope_defs = load("envelopes.json")
+        self.expenses = load("expenses.json")
+        self.this_month = env.expenses_in_month(self.expenses, TODAY.year, TODAY.month)
+
+    def test_demo_envelope_categories(self):
+        categories = {e["category"] for e in self.envelope_defs}
+        self.assertEqual(categories, {"Potraviny", "Nafta", "Deti"})
+
+    def test_summary_matches_demo_expenses(self):
+        summary = env.envelopes_summary(self.envelope_defs, self.this_month)
+        by_category = {r["category"]: r for r in summary["rows"]}
+        self.assertEqual(by_category["Potraviny"]["spent"], 60)
+        self.assertEqual(by_category["Nafta"]["spent"], 45)
+        self.assertEqual(by_category["Deti"]["spent"], 0)
+        self.assertFalse(any(r["over_budget"] for r in summary["rows"]))
 
 
 class DemoDataNextCycleIsolationTests(unittest.TestCase):
