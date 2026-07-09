@@ -7,6 +7,7 @@ from datetime import date
 from flask import Flask, request, redirect, render_template_string
 
 import obligations as ob
+import receipts
 
 BASE = Path.home() / "BudgetPilot"
 DATA = BASE / "data"
@@ -442,7 +443,12 @@ def expense_add():
     amount = request.form.get("amount","").strip()
     if amount:
         data = load(EXPENSES, [])
-        data.append({"name":request.form.get("name","Výdavok"),"amount":float(amount),"date":request.form.get("date",date.today().isoformat())})
+        data.append({
+            "name": request.form.get("name","Výdavok"),
+            "amount": float(amount),
+            "date": request.form.get("date", date.today().isoformat()),
+            "source": receipts.SOURCE_MANUAL,
+        })
         save(EXPENSES, data)
     return go_home()
 
@@ -450,7 +456,12 @@ def expense_add():
 def expense_update(i):
     data = load(EXPENSES, [])
     if i < len(data):
-        data[i] = {"name":request.form.get("name","Výdavok"),"amount":float(request.form.get("amount",0) or 0),"date":request.form.get("date",date.today().isoformat())}
+        updates = {
+            "name": request.form.get("name","Výdavok"),
+            "amount": float(request.form.get("amount",0) or 0),
+            "date": request.form.get("date", date.today().isoformat()),
+        }
+        data[i] = {**data[i], **updates}
     save(EXPENSES, data)
     return go_home()
 
