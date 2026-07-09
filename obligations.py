@@ -6,10 +6,10 @@ snapshots. No file I/O and no dependency on the rest of BudgetPilot — takes
 plain data in, returns plain data out, so it can be unit tested in
 isolation (see forecast.py for the same pattern).
 """
-from datetime import date
+from datetime import date, timedelta
 import calendar
 
-from forecast import PENDING, PAID_ME, DEFERRED
+from forecast import PENDING, PAID_ME, DEFERRED, VALID_STATES
 
 RECEIVED = "received"
 I_OWE = "I_owe"
@@ -177,6 +177,39 @@ def merge_payment_fields(existing, updates):
     merged = dict(existing)
     merged.update(updates)
     return merged
+
+
+def set_payment_state(payment, state, deferred_to=None):
+    """Return `payment` with its state changed, all other metadata kept.
+
+    Keeps the legacy 'paid' boolean in sync (True only for paid_me) so any
+    code still reading 'paid' directly (or old data without a 'state'
+    field) sees consistent behavior. `deferred_to` is only applied when
+    the new state is DEFERRED; it is otherwise left untouched, so a
+    payment that was previously deferred keeps its last deferred_to if
+    later moved back to deferred without specifying a new date.
+    """
+    if state not in VALID_STATES:
+        raise ValueError(f"unknown payment state: {state!r}")
+    merged = dict(payment)
+    merged["state"] = state
+    merged["paid"] = (state == PAID_ME)
+    if state == DEFERRED and deferred_to is not None:
+        merged["deferred_to"] = deferred_to
+    return merged
+
+
+def defer_payment(payment, today, days=7):
+    """Push a payment `days` further out, stacking on any existing deferral.
+
+    Simplest safe deferred action the current data model supports: there
+    is no per-cycle due-date override, so deferring repeatedly keeps
+    adding `days` to the last deferred_to (or to today, the first time).
+    """
+    base = payment.get("deferred_to")
+    base_date = _as_date(base) if base else today
+    new_target = base_date + timedelta(days=days)
+    return set_payment_state(payment, DEFERRED, deferred_to=new_target.isoformat())
 
 
 def ensure_recurring_compatible(payment, new_id=None):

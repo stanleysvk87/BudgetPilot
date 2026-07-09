@@ -8,6 +8,7 @@ from flask import Flask, request, redirect, render_template_string
 
 import obligations as ob
 import receipts
+from forecast import payment_state, PENDING, PAID_ME, PAID_OTHER, PAID_RESERVE, DEFERRED
 
 BASE = Path.home() / "BudgetPilot"
 DATA = BASE / "data"
@@ -30,6 +31,24 @@ FREQ_LABEL = {
     "custom_months": "vlastné",
     "once": "jednorazovo"
 }
+
+STATE_LABEL = {
+    PENDING: "Nezaplatené",
+    PAID_ME: "Zaplatené z účtu",
+    PAID_OTHER: "Zaplatil niekto iný",
+    PAID_RESERVE: "Zaplatené z rezervy",
+    DEFERRED: "Odložené",
+}
+STATE_BADGE_CLASS = {
+    PENDING: "",
+    PAID_ME: "ok",
+    PAID_OTHER: "ok",
+    PAID_RESERVE: "ok",
+    DEFERRED: "warn",
+}
+# States settable directly from the dropdown; deferred has its own
+# "Odložiť o 7 dní" button since it needs a computed deferred_to date.
+SELECTABLE_STATES = [PENDING, PAID_ME, PAID_OTHER, PAID_RESERVE]
 
 def load(path, default):
     if not path.exists():
@@ -120,9 +139,11 @@ button{padding:10px 14px;border:0;border-radius:12px;background:var(--blue);colo
 .main{display:flex;flex-direction:column;gap:14px}
 table{width:100%;border-collapse:collapse} th,td{padding:11px 8px;border-bottom:1px solid var(--line);text-align:left;font-size:14px} th{color:var(--muted);font-size:13px}
 .actions{display:flex;gap:6px;justify-content:flex-end}.actions form{margin:0}
+.actions-stack{display:flex;flex-direction:column;gap:6px;align-items:stretch;min-width:160px}.actions-stack form{margin:0}.actions-stack select{margin:0}
 .small{font-size:13px;color:var(--muted);line-height:1.35}.inline{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 pre{white-space:pre-wrap;background:#020617;border:1px solid var(--line);border-radius:14px;padding:14px;overflow:auto;max-height:380px;font-size:13px}
 .badge{display:inline-block;padding:5px 9px;border-radius:999px;font-size:12px;background:#374151}
+.badge.ok{background:#14532d} .badge.warn{background:#78350f}
 a{color:white;text-decoration:none}
 @media(max-width:1000px){.app{grid-template-columns:1fr}.topgrid{grid-template-columns:1fr}}
 @media(max-width:600px){.app{padding:10px}table{min-width:560px}}
@@ -260,9 +281,15 @@ a{color:white;text-decoration:none}
 <tr>
 <td>{{x.get('name')}}</td><td>{{x.get('amount')}} €</td><td>{{x.get('day')}}</td>
 <td>{{freq_label.get(x.get('frequency'), x.get('frequency'))}}{% if x.get('frequency')=='custom_months' %} / {{x.get('every_months')}} mes.{% endif %}</td>
-<td>{% if x.get('paid') %}<span class="badge ok">zaplatené</span>{% else %}<span class="badge">nezaplatené</span>{% endif %}</td>
-<td class="actions">
-<form method="post" action="/payment/toggle/{{loop.index0}}"><button class="secondary">{% if x.get('paid') %}Odznačiť{% else %}Zaplatené{% endif %}</button></form>
+<td><span class="badge {{state_badge_class.get(payment_state(x),'')}}">{{state_label.get(payment_state(x), payment_state(x))}}</span>{% if payment_state(x)=='deferred' and x.get('deferred_to') %}<br><span class="small">do {{x.get('deferred_to')}}</span>{% endif %}</td>
+<td class="actions-stack">
+<form method="post" action="/payment/state/{{loop.index0}}">
+<select name="state">
+{% for s in selectable_states %}<option value="{{s}}" {% if payment_state(x)==s %}selected{% endif %}>{{state_label.get(s,s)}}</option>{% endfor %}
+</select>
+<button class="secondary">Nastaviť</button>
+</form>
+<form method="post" action="/payment/defer/{{loop.index0}}"><button class="secondary">Odložiť o 7 dní</button></form>
 <form method="get" action="/edit/payment/{{loop.index0}}"><button class="secondary">Upraviť</button></form>
 <form method="post" action="/payment/delete/{{loop.index0}}"><button class="danger">Zmazať</button></form>
 </td></tr>
@@ -325,7 +352,9 @@ def render_page(edit_income=None, edit_payment=None, edit_expense=None):
         test_result=test_result, test_amount=test_amount,
         edit_income=edit_income, edit_payment=edit_payment, edit_expense=edit_expense,
         income_form=income_form, payment_form=payment_form, expense_form=expense_form,
-        setup_needed=setup_needed
+        setup_needed=setup_needed,
+        payment_state=payment_state, state_label=STATE_LABEL,
+        state_badge_class=STATE_BADGE_CLASS, selectable_states=SELECTABLE_STATES
     )
 
 @app.route("/")
@@ -423,11 +452,20 @@ def payment_update(i):
     save(PAYMENTS, data)
     return go_home()
 
-@app.post("/payment/toggle/<int:i>")
-def payment_toggle(i):
+@app.post("/payment/state/<int:i>")
+def payment_set_state(i):
+    data = load(PAYMENTS, [])
+    new_state = request.form.get("state", PENDING)
+    if i < len(data) and new_state in SELECTABLE_STATES:
+        data[i] = ob.set_payment_state(data[i], new_state)
+    save(PAYMENTS, data)
+    return go_home()
+
+@app.post("/payment/defer/<int:i>")
+def payment_defer(i):
     data = load(PAYMENTS, [])
     if i < len(data):
-        data[i]["paid"] = not data[i].get("paid", False)
+        data[i] = ob.defer_payment(data[i], date.today())
     save(PAYMENTS, data)
     return go_home()
 

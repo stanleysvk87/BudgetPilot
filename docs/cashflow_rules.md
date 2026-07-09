@@ -43,3 +43,46 @@ month's obligation instead).
 
 This is a pure function: no file I/O, no globals, so it's fully covered
 by `tests/test_forecast.py`.
+
+## Web UI actions → payment states
+
+The payments table in `budgetpilot_web.py` exposes a state selector per
+payment (`POST /payment/state/<i>`) plus a dedicated "Odložiť o 7 dní"
+button (`POST /payment/defer/<i>`). Both call the same helpers used by
+the tests, so there is no calculation logic duplicated in the web route:
+
+| button / select value          | maps to                          |
+|---------------------------------|-----------------------------------|
+| Nezaplatené                     | `pending`                         |
+| Zaplatené z účtu                | `paid_me`                         |
+| Zaplatil niekto iný              | `paid_other`                      |
+| Zaplatené z rezervy              | `paid_reserve`                    |
+| Odložiť o 7 dní                 | `deferred`, `obligations.defer_payment()` |
+
+`obligations.set_payment_state()` changes only the `state` (and syncs the
+legacy `paid` boolean for anything still reading it) — every other field
+on the payment (id, priority, flexibility, active, start_month, ...) is
+preserved untouched. `obligations.defer_payment()` does the same, adding
+7 days to the current `deferred_to` (or to today, the first time).
+
+**Known limitation:** the current data model has no per-cycle due-date
+override, so "Odložiť" always adds a flat 7 days rather than letting you
+pick an arbitrary new date. If the new date lands after the next payday,
+`forecast()` correctly drops it out of the *current* forecast window
+(see `test_deferred_past_horizon_excluded_from_current_window`) — it
+simply becomes a concern for the next cycle instead.
+
+## Demo/default data
+
+`data/*.json` ships with a small, fake, internally-consistent household
+dataset (mortgage, electricity, internet, car insurance, kindergarten,
+a subscription, a loan installment, plus a couple of manual expenses)
+sized so the forecast numbers can be checked by hand. It is **not**
+real financial data — replace it with your own household's numbers
+whenever you're ready. Whatever was in `data/` before this reset was
+backed up to `backups/data-reset-<timestamp>/` first, and is not
+required for anything to keep working.
+
+No bank integration, OCR, AI, or cloud sync is included anywhere in this
+project — payments and expenses are entered by hand, and `receipts.py`
+remains an unused extension point (see `docs/receipt_ocr.md`).

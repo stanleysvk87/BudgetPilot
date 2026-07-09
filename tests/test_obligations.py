@@ -11,7 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from forecast import forecast, PENDING, PAID_ME
+from forecast import forecast, PENDING, PAID_ME, PAID_OTHER, PAID_RESERVE, DEFERRED
 import obligations as ob
 
 
@@ -166,6 +166,64 @@ class EnsureRecurringCompatibleTests(unittest.TestCase):
         self.assertEqual(item["id"], "keepme")
         self.assertFalse(item["active"])
         self.assertEqual(item["priority"], "flexible")
+
+
+class SetPaymentStateTests(unittest.TestCase):
+    def test_set_paid_me_marks_legacy_paid_true(self):
+        payment = {"id": "p1", "name": "Internet", "amount": 25, "priority": "mandatory"}
+        updated = ob.set_payment_state(payment, PAID_ME)
+        self.assertEqual(updated["state"], PAID_ME)
+        self.assertTrue(updated["paid"])
+        self.assertEqual(updated["priority"], "mandatory")
+
+    def test_set_paid_other_clears_legacy_paid_flag(self):
+        payment = {"id": "p1", "amount": 25, "paid": True}
+        updated = ob.set_payment_state(payment, PAID_OTHER)
+        self.assertEqual(updated["state"], PAID_OTHER)
+        self.assertFalse(updated["paid"])
+
+    def test_set_paid_reserve(self):
+        payment = {"id": "p1", "amount": 25}
+        updated = ob.set_payment_state(payment, PAID_RESERVE)
+        self.assertEqual(updated["state"], PAID_RESERVE)
+        self.assertFalse(updated["paid"])
+
+    def test_reset_to_pending_from_paid(self):
+        payment = {"id": "p1", "amount": 25, "state": PAID_ME, "paid": True}
+        updated = ob.set_payment_state(payment, PENDING)
+        self.assertEqual(updated["state"], PENDING)
+        self.assertFalse(updated["paid"])
+
+    def test_unknown_state_is_rejected(self):
+        with self.assertRaises(ValueError):
+            ob.set_payment_state({"amount": 25}, "bogus")
+
+    def test_legacy_paid_true_without_state_field_behaves_as_paid_me(self):
+        legacy = {"amount": 25, "paid": True}
+        from forecast import payment_state
+        self.assertEqual(payment_state(legacy), PAID_ME)
+
+
+class DeferPaymentTests(unittest.TestCase):
+    def test_defer_sets_state_and_pushes_seven_days_from_today(self):
+        payment = {"id": "p1", "name": "Škôlka", "amount": 120, "priority": "important"}
+        updated = ob.defer_payment(payment, date(2026, 7, 9))
+        self.assertEqual(updated["state"], DEFERRED)
+        self.assertEqual(updated["deferred_to"], "2026-07-16")
+        self.assertEqual(updated["priority"], "important")
+        self.assertEqual(updated["name"], "Škôlka")
+
+    def test_defer_again_stacks_on_previous_deferred_to(self):
+        payment = {"id": "p1", "amount": 120, "state": DEFERRED, "deferred_to": "2026-07-16"}
+        updated = ob.defer_payment(payment, date(2026, 7, 20))
+        self.assertEqual(updated["deferred_to"], "2026-07-23")
+
+    def test_defer_preserves_metadata_not_related_to_state(self):
+        payment = {"id": "p1", "amount": 120, "due_day": 10, "start_month": "2026-01", "active": True}
+        updated = ob.defer_payment(payment, date(2026, 7, 9))
+        self.assertEqual(updated["due_day"], 10)
+        self.assertEqual(updated["start_month"], "2026-01")
+        self.assertTrue(updated["active"])
 
 
 if __name__ == "__main__":

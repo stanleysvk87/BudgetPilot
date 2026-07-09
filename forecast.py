@@ -4,6 +4,7 @@
 No file I/O and no dependency on the rest of BudgetPilot — takes plain
 data in, returns plain data out, so it can be unit tested in isolation.
 """
+from datetime import date
 
 PENDING = "pending"
 PAID_ME = "paid_me"
@@ -29,9 +30,13 @@ def effective_due_date(payment, due_date):
 
     A deferred payment moves to 'deferred_to' if set, otherwise it keeps
     its original due date (still pending, just flagged for later review).
+    'deferred_to' may arrive as an ISO date string straight out of JSON,
+    so it's normalized to a date object here rather than pushing that
+    requirement onto every caller.
     """
-    if payment_state(payment) == DEFERRED and payment.get("deferred_to"):
-        return payment["deferred_to"]
+    deferred_to = payment.get("deferred_to")
+    if payment_state(payment) == DEFERRED and deferred_to:
+        return date.fromisoformat(deferred_to) if isinstance(deferred_to, str) else deferred_to
     return due_date
 
 
