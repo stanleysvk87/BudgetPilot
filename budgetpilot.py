@@ -5,7 +5,7 @@ from pathlib import Path
 from datetime import date
 import calendar
 
-from forecast import forecast as run_forecast, payment_state
+from forecast import forecast as run_forecast, payment_state, current_cash_position
 from obligations import month_key
 from payment_events import load_payment_events, apply_payment_events
 
@@ -130,7 +130,7 @@ def calc_month(year, month):
     next_income = next_income_date_all(incomes)
 
     future_income = 0
-    future_required = 0
+    unpaid_required_before_payday = 0
 
     if is_current_month:
         for i in income_items:
@@ -143,19 +143,29 @@ def calc_month(year, month):
             if due_date(p, year, month) >= TODAY
         ]
         fc = run_forecast(account_balance, upcoming_payments, TODAY, next_income)
-        future_required = fc["required_main"]
+        unpaid_required_before_payday = fc["required_main"]
 
-        real_available = account_balance + future_income - future_required - expense_total
+        # Current cash position: only money available *now*. Future income
+        # must never inflate this, or a real shortfall reads as "safe".
+        position = current_cash_position(account_balance, unpaid_required_before_payday, safe_min)
+        safe_to_spend_now = position["safe_to_spend_now"]
+        shortfall_before_payday = position["shortfall_before_payday"]
+
+        # Separate projection that *may* include future income — never
+        # shown as if it were money available today.
+        projected_after_payday = (
+            account_balance + future_income - unpaid_required_before_payday - expense_total - safe_min
+        )
     else:
-        real_available = planned_month_balance
+        safe_to_spend_now = max(planned_month_balance, 0.0)
+        shortfall_before_payday = min(planned_month_balance, 0.0)
+        projected_after_payday = planned_month_balance
 
     days_to_income = max((next_income - TODAY).days, 0) if next_income else None
 
-    usable_money = real_available - safe_min if is_current_month else real_available
     daily_limit = None
-
     if is_current_month and days_to_income and days_to_income > 0:
-        daily_limit = max(usable_money, 0) / days_to_income
+        daily_limit = max(safe_to_spend_now, 0) / days_to_income
 
     return {
         "year": year,
@@ -168,13 +178,14 @@ def calc_month(year, month):
         "expense_total": expense_total,
         "planned_month_balance": planned_month_balance,
         "future_income": future_income,
-        "future_required": future_required,
-        "real_available": real_available,
-        "usable_money": usable_money,
+        "unpaid_required_before_payday": unpaid_required_before_payday,
+        "safe_to_spend_now": safe_to_spend_now,
+        "shortfall_before_payday": shortfall_before_payday,
+        "projected_after_payday": projected_after_payday,
         "daily_limit": daily_limit,
         "days_to_income": days_to_income,
         "next_income_date": next_income.isoformat() if next_income else None,
-        "status": status_text(usable_money, daily_limit),
+        "status": status_text(safe_to_spend_now, daily_limit),
         "payments": payment_items,
         "incomes": income_items,
     }
@@ -197,9 +208,11 @@ def print_month(r):
     print(f"Plán mesiaca:           {r['planned_month_balance']:.2f} €")
     print()
     print(f"Ešte príde príjem:      {r['future_income']:.2f} €")
-    print(f"Ešte musíš zaplatiť:    {r['future_required']:.2f} €")
-    print(f"Reálne voľné od dnes:   {r['real_available']:.2f} €")
-    print(f"Použiteľné peniaze:     {r['usable_money']:.2f} €")
+    print(f"Nezaplatené do výplaty: {r['unpaid_required_before_payday']:.2f} €")
+    print(f"Bezpečne minúť teraz:   {r['safe_to_spend_now']:.2f} €")
+    if r["shortfall_before_payday"] < 0:
+        print(f"Chýba do výplaty:       {r['shortfall_before_payday']:.2f} €")
+    print(f"Odhad po najbližšej výplate: {r['projected_after_payday']:.2f} €")
     print(f"Stav:                   {r['status']}")
 
     if r["days_to_income"] is not None:
@@ -237,7 +250,7 @@ def simulate(months=18):
 
 def can_spend(amount):
     r = calc_month(TODAY.year, TODAY.month)
-    usable_before = r["usable_money"]
+    usable_before = r["safe_to_spend_now"]
     after = usable_before - amount
 
     per_day = None
@@ -247,7 +260,7 @@ def can_spend(amount):
     print()
     print("===== TEST VÝDAVKU =====")
     print(f"Chceš minúť:            {amount:.2f} €")
-    print(f"Použiteľné peniaze:     {usable_before:.2f} €")
+    print(f"Bezpečne minúť teraz:   {usable_before:.2f} €")
     print(f"Voľné po výdavku:       {after:.2f} €")
 
     if r["days_to_income"] and r["days_to_income"] > 0:

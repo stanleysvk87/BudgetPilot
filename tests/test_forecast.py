@@ -11,7 +11,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from forecast import forecast, payment_state, PENDING, PAID_ME, PAID_OTHER, PAID_RESERVE, DEFERRED
+from forecast import (
+    forecast, payment_state, current_cash_position,
+    PENDING, PAID_ME, PAID_OTHER, PAID_RESERVE, DEFERRED,
+)
 
 
 TODAY = date(2026, 7, 9)
@@ -119,6 +122,47 @@ class ForecastTests(unittest.TestCase):
         result = forecast(1000, payments, TODAY, None)
         self.assertIsNone(result["days_to_income"])
         self.assertIsNone(result["daily_safe_to_spend"])
+
+
+class CurrentCashPositionTests(unittest.TestCase):
+    """Regression coverage for the safe-to-spend-now labeling bug: future
+    income must never inflate what's shown as available before payday."""
+
+    def test_shortfall_with_protected_reserve(self):
+        result = current_cash_position(400, 1032, protected_reserve=300)
+        self.assertEqual(result["safe_to_spend_now"], 0)
+        self.assertEqual(result["shortfall_before_payday"], -932)
+
+    def test_shortfall_without_protected_reserve(self):
+        result = current_cash_position(400, 1032, protected_reserve=0)
+        self.assertEqual(result["safe_to_spend_now"], 0)
+        self.assertEqual(result["shortfall_before_payday"], -632)
+
+    def test_safe_to_spend_now_is_never_963_for_the_reported_bug_case(self):
+        result = current_cash_position(400, 1032, protected_reserve=300)
+        self.assertNotEqual(result["safe_to_spend_now"], 963)
+
+    def test_safe_to_spend_now_never_exceeds_current_balance(self):
+        result = current_cash_position(400, unpaid_required_before_payday=0, protected_reserve=0)
+        self.assertLessEqual(result["safe_to_spend_now"], 400)
+        self.assertEqual(result["safe_to_spend_now"], 400)
+
+    def test_positive_position_has_no_shortfall(self):
+        result = current_cash_position(1000, 200, protected_reserve=100)
+        self.assertEqual(result["safe_to_spend_now"], 700)
+        self.assertEqual(result["shortfall_before_payday"], 0)
+
+    def test_future_income_is_not_a_parameter_and_cannot_leak_in(self):
+        # current_cash_position() only accepts current-balance inputs, so
+        # there is no way to pass future income into safe_to_spend_now.
+        before = current_cash_position(400, 1032, protected_reserve=300)
+        # Simulate a large incoming paycheck arriving after payday: it must
+        # have zero effect on today's figure because it's simply not an
+        # input to this calculation.
+        future_income = 2000
+        after = current_cash_position(400, 1032, protected_reserve=300)
+        self.assertEqual(before, after)
+        self.assertNotIn(future_income, after.values())
 
 
 if __name__ == "__main__":

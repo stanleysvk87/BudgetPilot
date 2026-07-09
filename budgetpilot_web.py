@@ -84,18 +84,21 @@ def run_core(args=None):
 def parse_dash(core):
     d = {
         "money": "-", "day": "-", "status": "-", "status_class": "ok",
-        "balance": "-", "unpaid_total": "-", "remaining": "-", "next_payday": "-",
+        "balance": "-", "unpaid_total": "-", "shortfall": "-",
+        "projected_after_payday": "-", "next_payday": "-",
     }
     for line in core.splitlines():
         if "Suma na účte teraz" in line:
             d["balance"] = line.split(":", 1)[1].strip()
-        elif "Ešte musíš zaplatiť" in line:
+        elif "Nezaplatené do výplaty" in line:
             d["unpaid_total"] = line.split(":", 1)[1].strip()
-        elif "Reálne voľné od dnes" in line:
-            d["remaining"] = line.split(":", 1)[1].strip()
+        elif "Chýba do výplaty" in line:
+            d["shortfall"] = line.split(":", 1)[1].strip()
+        elif "Odhad po najbližšej výplate" in line:
+            d["projected_after_payday"] = line.split(":", 1)[1].strip()
         elif "Ďalšia výplata" in line:
             d["next_payday"] = line.split(":", 1)[1].strip()
-        elif "Použiteľné peniaze" in line:
+        elif "Bezpečne minúť teraz" in line:
             d["money"] = line.split(":", 1)[1].strip()
         elif "Na deň" in line:
             d["day"] = line.split(":", 1)[1].strip()
@@ -296,10 +299,13 @@ details.card summary{cursor:pointer;font-size:20px;font-weight:700}
 <main class="main" id="overview">
 <div class="summarygrid">
 <div class="card metric"><div class="label">Zostatok na účte</div><div class="value">{{summary.balance}}</div></div>
-<div class="card metric"><div class="label">Nezaplatené (do výplaty)</div><div class="value">{{summary.unpaid_total}}</div></div>
-<div class="card metric"><div class="label">Zostane po povinných platbách</div><div class="value">{{summary.remaining}}</div></div>
-<div class="card metric"><div class="label">Bezpečne minúť</div><div class="value {{dash.status_class}}">{{summary.safe_to_spend}}</div></div>
+<div class="card metric"><div class="label">Nezaplatené pred výplatou</div><div class="value">{{summary.unpaid_total}}</div></div>
+<div class="card metric"><div class="label">Bezpečne minúť teraz (pred výplatou)</div><div class="value {{dash.status_class}}">{{summary.safe_to_spend}}</div></div>
 <div class="card metric"><div class="label">Na deň do výplaty</div><div class="value">{{summary.daily_safe_to_spend}}</div></div>
+{% if summary.shortfall != '-' %}
+<div class="card metric"><div class="label">Chýba do výplaty</div><div class="value bad">{{summary.shortfall}}</div></div>
+{% endif %}
+<div class="card metric"><div class="label">Odhad po najbližšej výplate (vrátane budúceho príjmu)</div><div class="value">{{summary.projected_after_payday}}</div></div>
 <div class="card metric"><div class="label">Ďalšia výplata</div><div class="value">{{summary.next_payday}}</div></div>
 </div>
 
@@ -471,9 +477,10 @@ def render_page(edit_income=None, edit_payment=None, edit_expense=None):
     summary = {
         "balance": dash["balance"],
         "unpaid_total": dash["unpaid_total"],
-        "remaining": dash["remaining"],
+        "shortfall": dash["shortfall"],
         "safe_to_spend": dash["money"],
         "daily_safe_to_spend": dash["day"],
+        "projected_after_payday": dash["projected_after_payday"],
         "next_payday": dash["next_payday"] if dash["next_payday"] != "-" else (
             f"deň {settings.get('payday_day')}" if settings.get("payday_day") else "-"
         ),

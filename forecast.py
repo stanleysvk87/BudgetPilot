@@ -100,3 +100,19 @@ def forecast(account_balance, payments, today, horizon_end=None):
         "daily_safe_to_spend": daily_safe_to_spend,
         "breakdown": breakdown,
     }
+
+
+def current_cash_position(current_balance, unpaid_required_before_payday, protected_reserve=0.0):
+    """Cash actually available to spend right now, before the next payday.
+
+    Deliberately excludes future income: money that hasn't arrived yet is
+    not safe to spend today. `safe_to_spend_now` is floored at 0 and can
+    never exceed `current_balance`; when obligations plus the protected
+    reserve exceed the balance, `shortfall_before_payday` carries the gap
+    as a negative number instead.
+    """
+    raw = current_balance - unpaid_required_before_payday - protected_reserve
+    return {
+        "safe_to_spend_now": max(raw, 0.0),
+        "shortfall_before_payday": min(raw, 0.0),
+    }
