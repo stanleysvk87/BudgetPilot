@@ -19,10 +19,12 @@ sys.path.insert(0, str(ROOT))
 
 from forecast import forecast, payment_state, VALID_STATES
 import obligations as ob
+from payment_events import apply_payment_events
 
 DATA = ROOT / "data"
 TODAY = date(2026, 7, 9)
 NEXT_INCOME = date(2026, 7, 15)
+CYCLE_KEY = "2026-07"
 
 
 def load(name):
@@ -31,7 +33,7 @@ def load(name):
 
 class DemoDataLoadsTests(unittest.TestCase):
     def test_all_data_files_parse(self):
-        for name in ("settings.json", "incomes.json", "payments.json", "expenses.json"):
+        for name in ("settings.json", "incomes.json", "payments.json", "expenses.json", "payment_events.json"):
             self.assertTrue((DATA / name).exists(), f"missing {name}")
             load(name)  # must not raise
 
@@ -40,9 +42,22 @@ class DemoDataLoadsTests(unittest.TestCase):
         payments = load("payments.json")
         self.assertFalse(ob.needs_setup(settings, payments))
 
-    def test_demo_payments_cover_every_payment_state(self):
+    def test_demo_payments_json_holds_templates_not_baked_in_state(self):
+        # payments.json must represent recurring templates only — no
+        # payment may carry a permanently-paid state on the template
+        # itself, or it would incorrectly stay "paid" every future month.
         payments = load("payments.json")
-        states_present = {payment_state(p) for p in payments}
+        for p in payments:
+            self.assertNotIn("state", p)
+            self.assertFalse(p.get("paid", False))
+
+    def test_demo_payment_events_cover_every_non_pending_state(self):
+        payments = load("payments.json")
+        events = load("payment_events.json")
+        resolved = apply_payment_events(
+            ob.generate_recurring_for_month(payments, 2026, 7), events, CYCLE_KEY
+        )
+        states_present = {payment_state(p) for p in resolved}
         self.assertEqual(states_present, VALID_STATES)
 
     def test_demo_payments_cover_mandatory_flexible_and_optional(self):
@@ -58,7 +73,9 @@ class DemoDashboardForecastTests(unittest.TestCase):
     def setUp(self):
         self.settings = load("settings.json")
         payments = load("payments.json")
-        self.resolved = ob.generate_recurring_for_month(payments, 2026, 7)
+        events = load("payment_events.json")
+        templates_for_july = ob.generate_recurring_for_month(payments, 2026, 7)
+        self.resolved = apply_payment_events(templates_for_july, events, CYCLE_KEY)
 
     def test_expected_recurring_payments_resolved_for_july(self):
         self.assertEqual(len(self.resolved), 7)
@@ -80,6 +97,19 @@ class DemoDashboardForecastTests(unittest.TestCase):
         # Easy to verify by hand, not huge/unrealistic.
         self.assertLess(self.settings["account_balance"], 5000)
         self.assertLess(self.settings["reserve_amount"], 5000)
+
+
+class DemoDataNextCycleIsolationTests(unittest.TestCase):
+    """The demo payment_events.json only has entries for 2026-07 — August
+    must not inherit any of July's paid/deferred states."""
+
+    def test_august_resolves_all_demo_payments_as_pending(self):
+        payments = load("payments.json")
+        events = load("payment_events.json")
+        templates_for_august = ob.generate_recurring_for_month(payments, 2026, 8)
+        resolved = apply_payment_events(templates_for_august, events, "2026-08")
+        states_present = {payment_state(p) for p in resolved}
+        self.assertEqual(states_present, {"pending"})
 
 
 if __name__ == "__main__":

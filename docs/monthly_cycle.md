@@ -58,6 +58,55 @@ numbers) was extended with the same `active` / `cancelled_from_month`
 checks, so cancelling an obligation in `/setup` actually removes it from
 the forecast, not just from the new pure-function layer.
 
+## Recurring payment template vs. monthly/cycle payment event
+
+A recurring payment in `data/payments.json` is a **template**: it
+describes the obligation (name, amount, due day, priority, flexibility),
+not whether this month's occurrence has been paid. Marking Electricity
+paid in July must not make it appear paid in August — the template is
+the same row every month, so baking a permanent `paid`/`state` field onto
+it would leak that state forward into every future cycle. That was the
+bug this slice fixes.
+
+Instead, state changes live in `data/payment_events.json`, one event per
+`(payment_id, cycle_key)`:
+
+```json
+{
+  "payment_id": "demo-elektrina",
+  "cycle_key": "2026-07",
+  "state": "paid_me",
+  "deferred_to": "2026-07-14",
+  "note": "optional",
+  "updated_at": "2026-07-09T09:00:00"
+}
+```
+
+Rules (`payment_events.py`):
+
+- If no event exists for a `(payment_id, cycle_key)` pair, the effective
+  state is `pending` — always, even if the template has a leftover
+  legacy `state`/`paid` field from before this model existed.
+- An event for one cycle never affects another cycle.
+  `apply_payment_events(payments, events, cycle_key)` resolves the
+  effective state for exactly one cycle at a time and is what both
+  `budgetpilot.py`'s `calc_month()` and `budgetpilot_web.py`'s dashboard
+  call before forecasting or rendering.
+- Web state actions (`POST /payment/state/<i>`, `POST /payment/defer/<i>`)
+  write only to `payment_events.json` for the current cycle
+  (`payment_events.get_current_cycle_key()`), never to the template.
+- Editing a recurring payment (`POST /payment/update/<i>`) only ever
+  touches the template fields the edit form exposes — it cannot change
+  any cycle's event.
+
+`cycle_key` currently uses `"YYYY-MM"` (calendar month), but the
+functions are named around "cycle" rather than "month"
+(`cycle_key_for_date`, `get_current_cycle_key`, "payment event" /
+"payment occurrence") on purpose: a future slice may switch to
+payday-to-payday cycles instead of calendar months without reshaping
+this module, only changing how `get_current_cycle_key()` computes the
+key.
+
 ## One-time obligations and debts
 
 Two more concepts exist as pure helpers (`obligations.py`) but don't yet

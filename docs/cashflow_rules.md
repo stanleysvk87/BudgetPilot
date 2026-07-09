@@ -6,9 +6,21 @@ income date**, not just what happened this month.
 
 ## Payment states
 
-Every entry in `data/payments.json` can carry a `state` field. If absent,
-the legacy boolean `paid` is used instead (`paid: true` → `paid_me`,
-otherwise `pending`).
+`data/payments.json` holds recurring payment **templates** — name,
+amount, due day, priority, flexibility. A template does not carry a
+permanent paid/deferred state: which state applies is resolved per
+month/cycle from `data/payment_events.json` (see
+`docs/monthly_cycle.md`). This matters because a recurring payment
+appears every month — if "paid" were baked onto the template itself,
+marking Electricity `paid_me` in July would incorrectly leave it
+`paid_me` in August too.
+
+`forecast.payment_state(payment)` still normalizes a `state` field
+(falling back to the legacy boolean `paid`) on whatever dict it's given —
+that's what `payment_events.apply_payment_events()` uses internally after
+resolving the effective per-cycle state, and it's also what makes legacy
+data without a `payment_events.json` entry (or without the new model at
+all) still parse without crashing.
 
 | state          | meaning                                   | reduces main forecast? | reduces reserve? |
 |----------------|--------------------------------------------|:-----------------------:|:-----------------:|
@@ -48,8 +60,9 @@ by `tests/test_forecast.py`.
 
 The payments table in `budgetpilot_web.py` exposes a state selector per
 payment (`POST /payment/state/<i>`) plus a dedicated "Odložiť o 7 dní"
-button (`POST /payment/defer/<i>`). Both call the same helpers used by
-the tests, so there is no calculation logic duplicated in the web route:
+button (`POST /payment/defer/<i>`). Both write to
+`data/payment_events.json` for the **current cycle only** — they never
+touch the template in `data/payments.json`:
 
 | button / select value          | maps to                          |
 |---------------------------------|-----------------------------------|
@@ -57,31 +70,49 @@ the tests, so there is no calculation logic duplicated in the web route:
 | Zaplatené z účtu                | `paid_me`                         |
 | Zaplatil niekto iný              | `paid_other`                      |
 | Zaplatené z rezervy              | `paid_reserve`                    |
-| Odložiť o 7 dní                 | `deferred`, `obligations.defer_payment()` |
+| Odložiť o 7 dní                 | `deferred`, `payment_events.defer_payment_event()` |
 
-`obligations.set_payment_state()` changes only the `state` (and syncs the
-legacy `paid` boolean for anything still reading it) — every other field
-on the payment (id, priority, flexibility, active, start_month, ...) is
-preserved untouched. `obligations.defer_payment()` does the same, adding
-7 days to the current `deferred_to` (or to today, the first time).
+`payment_events.set_payment_event()` creates or replaces the event for
+that `(payment_id, cycle_key)` pair only — every other cycle's event, and
+every field on the template itself (id, priority, flexibility, active,
+start_month, ...) is untouched. `payment_events.defer_payment_event()`
+does the same, adding 7 days to the current cycle's `deferred_to` (or to
+today, the first time this cycle).
 
-**Known limitation:** the current data model has no per-cycle due-date
-override, so "Odložiť" always adds a flat 7 days rather than letting you
-pick an arbitrary new date. If the new date lands after the next payday,
-`forecast()` correctly drops it out of the *current* forecast window
-(see `test_deferred_past_horizon_excluded_from_current_window`) — it
-simply becomes a concern for the next cycle instead.
+`obligations.set_payment_state()` / `obligations.defer_payment()` still
+exist and are still tested — they mutate a payment dict's state directly
+and remain useful for one-time template-level edits/migration, but the
+web UI no longer calls them for state changes, since that would be the
+permanent-template bug this model fixes.
+
+**Known limitation:** there is no per-cycle due-date override yet, so
+"Odložiť" always adds a flat 7 days rather than letting you pick an
+arbitrary new date, and a deferral cannot yet be scheduled into a future
+cycle — it is always scoped to the current cycle. If the new date lands
+after the next payday, `forecast()` correctly drops it out of the
+*current* forecast window (see
+`test_deferred_past_horizon_excluded_from_current_window`) — it simply
+becomes a concern for the next cycle instead.
 
 ## Demo/default data
 
-`data/*.json` ships with a small, fake, internally-consistent household
-dataset (mortgage, electricity, internet, car insurance, kindergarten,
-a subscription, a loan installment, plus a couple of manual expenses)
-sized so the forecast numbers can be checked by hand. It is **not**
-real financial data — replace it with your own household's numbers
-whenever you're ready. Whatever was in `data/` before this reset was
-backed up to `backups/data-reset-<timestamp>/` first, and is not
-required for anything to keep working.
+`data/payments.json` ships with a small, fake, internally-consistent
+household set of recurring templates (mortgage, electricity, internet,
+car insurance, kindergarten, a subscription, a loan installment) sized so
+the forecast numbers can be checked by hand. `data/payment_events.json`
+holds the current demo cycle's (`2026-07`) state for those templates —
+electricity paid from the account, internet paid by someone else, car
+insurance paid from the reserve, kindergarten deferred a few days. None
+of that is baked onto the templates themselves, so simulating a later
+month (`python3 budgetpilot.py`'s 18-month simulation, or the CLI/web
+dashboard once the system date moves past July 2026) correctly shows
+every payment back to `pending` until a new event exists for that cycle.
+This is **not** real financial data — replace it with your own
+household's numbers whenever you're ready. Whatever was in `data/`
+before this reset was backed up to `backups/data-reset-<timestamp>/`
+first, and whatever was there before the payment-events migration was
+backed up to `backups/data-payment-events-<timestamp>/`; neither backup
+is required for anything to keep working.
 
 No bank integration, OCR, AI, or cloud sync is included anywhere in this
 project — payments and expenses are entered by hand, and `receipts.py`

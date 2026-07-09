@@ -7,6 +7,7 @@ import calendar
 
 from forecast import forecast as run_forecast, payment_state
 from obligations import month_key
+from payment_events import load_payment_events, apply_payment_events
 
 BASE = Path.home() / "BudgetPilot"
 DATA = BASE / "data"
@@ -99,6 +100,7 @@ def calc_month(year, month):
     incomes = load(INCOMES, [])
     payments = load(PAYMENTS, [])
     expenses = load(EXPENSES, [])
+    events = load_payment_events()
 
     account_balance = float(settings.get("account_balance", 0))
     use_reserve = bool(settings.get("use_reserve", False))
@@ -109,7 +111,12 @@ def calc_month(year, month):
     is_current_month = year == TODAY.year and month == TODAY.month
 
     income_items = [i for i in incomes if occurs(i, year, month)]
-    payment_items = [p for p in payments if occurs(p, year, month)]
+    # Effective payment state is resolved per cycle: a July event never
+    # affects August, and a payment with no event for this cycle defaults
+    # to pending, regardless of whatever state its template last carried.
+    payment_items = apply_payment_events(
+        [p for p in payments if occurs(p, year, month)], events, month_key(year, month)
+    )
     expense_items = [
         e for e in expenses
         if month_start <= date.fromisoformat(e["date"]) <= month_end
@@ -166,6 +173,7 @@ def calc_month(year, month):
         "usable_money": usable_money,
         "daily_limit": daily_limit,
         "days_to_income": days_to_income,
+        "next_income_date": next_income.isoformat() if next_income else None,
         "status": status_text(usable_money, daily_limit),
         "payments": payment_items,
         "incomes": income_items,
@@ -198,6 +206,8 @@ def print_month(r):
         print(f"Do ďalšej výplaty:      {r['days_to_income']} dní")
     if r["daily_limit"] is not None:
         print(f"Na deň:                 {r['daily_limit']:.2f} €")
+    if r.get("next_income_date"):
+        print(f"Ďalšia výplata:         {r['next_income_date']}")
 
     print()
     print("Príjmy tento mesiac:")

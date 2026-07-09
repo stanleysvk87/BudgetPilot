@@ -8,6 +8,7 @@ from flask import Flask, request, redirect, render_template_string
 
 import obligations as ob
 import receipts
+import payment_events as pe
 from forecast import payment_state, PENDING, PAID_ME, PAID_OTHER, PAID_RESERVE, DEFERRED
 
 BASE = Path.home() / "BudgetPilot"
@@ -50,6 +51,13 @@ STATE_BADGE_CLASS = {
 # "Odložiť o 7 dní" button since it needs a computed deferred_to date.
 SELECTABLE_STATES = [PENDING, PAID_ME, PAID_OTHER, PAID_RESERVE]
 
+URGENCY_LABEL_SK = {
+    pe.OVERDUE: "Po termíne",
+    pe.DUE_TODAY: "Dnes",
+    pe.SOON: "Čoskoro",
+    pe.LATER: "Neskôr",
+}
+
 def load(path, default):
     if not path.exists():
         path.write_text(json.dumps(default, indent=2, ensure_ascii=False))
@@ -74,9 +82,20 @@ def run_core(args=None):
         return f"CHYBA:\n{e}"
 
 def parse_dash(core):
-    d = {"money": "-", "day": "-", "status": "-", "status_class": "ok"}
+    d = {
+        "money": "-", "day": "-", "status": "-", "status_class": "ok",
+        "balance": "-", "unpaid_total": "-", "remaining": "-", "next_payday": "-",
+    }
     for line in core.splitlines():
-        if "Použiteľné peniaze" in line:
+        if "Suma na účte teraz" in line:
+            d["balance"] = line.split(":", 1)[1].strip()
+        elif "Ešte musíš zaplatiť" in line:
+            d["unpaid_total"] = line.split(":", 1)[1].strip()
+        elif "Reálne voľné od dnes" in line:
+            d["remaining"] = line.split(":", 1)[1].strip()
+        elif "Ďalšia výplata" in line:
+            d["next_payday"] = line.split(":", 1)[1].strip()
+        elif "Použiteľné peniaze" in line:
             d["money"] = line.split(":", 1)[1].strip()
         elif "Na deň" in line:
             d["day"] = line.split(":", 1)[1].strip()
@@ -145,15 +164,46 @@ pre{white-space:pre-wrap;background:#020617;border:1px solid var(--line);border-
 .badge{display:inline-block;padding:5px 9px;border-radius:999px;font-size:12px;background:#374151}
 .badge.ok{background:#14532d} .badge.warn{background:#78350f}
 a{color:white;text-decoration:none}
-@media(max-width:1000px){.app{grid-template-columns:1fr}.topgrid{grid-template-columns:1fr}}
-@media(max-width:600px){.app{padding:10px}table{min-width:560px}}
+.topnav{display:flex;flex-wrap:wrap;align-items:center;gap:4px 16px;padding:12px 18px;background:rgba(15,23,42,.97);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:10}
+.topnav .brand{font-weight:900;margin-right:8px}
+.topnav a,.topnav .navlink{color:var(--text);text-decoration:none;padding:8px 10px;border-radius:10px;font-size:14px}
+.topnav a:hover{background:var(--line)}
+.topnav .navlink.disabled{color:var(--muted);cursor:default}
+.summarygrid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:14px}
+.summarygrid .metric .value{font-size:26px}
+.section{margin-bottom:14px}
+.urgency-overdue{color:var(--red);font-weight:700}
+.urgency-due_today{color:var(--orange);font-weight:700}
+.urgency-soon{color:var(--orange)}
+.urgency-later{color:var(--muted)}
+details.card summary{cursor:pointer;font-size:20px;font-weight:700}
+@media(max-width:1000px){
+.app{grid-template-columns:1fr;display:flex;flex-direction:column}
+.main{order:1} .sidebar{order:2}
+.topgrid{grid-template-columns:1fr} .summarygrid{grid-template-columns:repeat(2,1fr)}
+}
+@media(max-width:600px){
+.app{padding:10px} table{min-width:560px}
+.topnav{padding:10px 12px;gap:2px 10px} .topnav a,.topnav .navlink{padding:10px 12px;font-size:15px}
+.summarygrid{grid-template-columns:1fr}
+}
 </style>
 </head>
 <body>
+<nav class="topnav">
+<span class="brand">BudgetPilot</span>
+<a href="#overview">Prehľad</a>
+<a href="#payments">Platby</a>
+<a href="#expenses">Výdavky</a>
+<a href="#settings">Nastavenia</a>
+<span class="navlink disabled">Obálky (čoskoro)</span>
+<span class="navlink disabled">Dlhy (čoskoro)</span>
+<span class="navlink disabled">Kalendár (čoskoro)</span>
+</nav>
 <div class="app">
 
 <aside class="sidebar">
-<div class="card">
+<div class="card" id="settings">
 <h1>BudgetPilot</h1>
 <div class="small">Hrubá pravda o mesiaci. Bez AI, bez blbostí.</div>
 </div>
@@ -243,12 +293,71 @@ a{color:white;text-decoration:none}
 </div>
 </aside>
 
-<main class="main">
-<div class="topgrid">
-<div class="card metric"><div class="label">Použiteľné peniaze</div><div class="value">{{dash.money}}</div></div>
-<div class="card metric"><div class="label">Na deň</div><div class="value">{{dash.day}}</div></div>
-<div class="card metric"><div class="label">Stav</div><div class="value {{dash.status_class}}">{{dash.status}}</div></div>
+<main class="main" id="overview">
+<div class="summarygrid">
+<div class="card metric"><div class="label">Zostatok na účte</div><div class="value">{{summary.balance}}</div></div>
+<div class="card metric"><div class="label">Nezaplatené (do výplaty)</div><div class="value">{{summary.unpaid_total}}</div></div>
+<div class="card metric"><div class="label">Zostane po povinných platbách</div><div class="value">{{summary.remaining}}</div></div>
+<div class="card metric"><div class="label">Bezpečne minúť</div><div class="value {{dash.status_class}}">{{summary.safe_to_spend}}</div></div>
+<div class="card metric"><div class="label">Na deň do výplaty</div><div class="value">{{summary.daily_safe_to_spend}}</div></div>
+<div class="card metric"><div class="label">Ďalšia výplata</div><div class="value">{{summary.next_payday}}</div></div>
 </div>
+
+<div class="card section">
+<h2>Nezaplatené / treba zaplatiť</h2>
+{% if unpaid %}
+<div class="table-scroll">
+<table><tr><th>Názov</th><th>Suma</th><th>Termín</th><th>Priorita</th><th>Naliehavosť</th><th></th></tr>
+{% for p in unpaid %}
+<tr>
+<td>{{p.name}}</td><td>{{p.amount}} €</td><td>{{p.due_date}}</td><td>{{p.get('priority','-')}}</td>
+<td class="urgency-{{p.urgency}}">{{urgency_label_sk.get(p.urgency, p.urgency)}}</td>
+<td class="actions-stack">
+<form method="post" action="/payment/state/{{p._index}}">
+<select name="state">{% for s in selectable_states %}<option value="{{s}}">{{state_label.get(s,s)}}</option>{% endfor %}</select>
+<button class="secondary">Nastaviť</button>
+</form>
+<form method="post" action="/payment/defer/{{p._index}}"><button class="secondary">Odložiť o 7 dní</button></form>
+</td></tr>
+{% endfor %}
+</table>
+</div>
+{% else %}<div class="small">Nič nečaká na zaplatenie. ✅</div>{% endif %}
+</div>
+
+<div class="card section">
+<h2>Odložené</h2>
+{% if deferred %}
+<div class="table-scroll">
+<table><tr><th>Názov</th><th>Suma</th><th>Odložené do</th><th></th></tr>
+{% for p in deferred %}
+<tr>
+<td>{{p.name}}</td><td>{{p.amount}} €</td><td>{{p.get('deferred_to','-')}}</td>
+<td class="actions-stack">
+<form method="post" action="/payment/state/{{p._index}}">
+<select name="state">{% for s in selectable_states %}<option value="{{s}}">{{state_label.get(s,s)}}</option>{% endfor %}</select>
+<button class="secondary">Nastaviť</button>
+</form>
+<form method="post" action="/payment/defer/{{p._index}}"><button class="secondary">Odložiť o 7 dní</button></form>
+</td></tr>
+{% endfor %}
+</table>
+</div>
+{% else %}<div class="small">Nič odložené.</div>{% endif %}
+</div>
+
+<details class="card section">
+<summary>Zaplatené ({{paid|length}})</summary>
+{% if paid %}
+<div class="table-scroll">
+<table><tr><th>Názov</th><th>Suma</th><th>Stav</th></tr>
+{% for p in paid %}
+<tr><td>{{p.name}}</td><td>{{p.amount}} €</td><td><span class="badge {{state_badge_class.get(p.state,'')}}">{{state_label.get(p.state, p.state)}}</span></td></tr>
+{% endfor %}
+</table>
+</div>
+{% else %}<div class="small">Zatiaľ nič zaplatené v tomto cykle.</div>{% endif %}
+</details>
 
 <div class="card">
 <h2>Môžem minúť?</h2>
@@ -273,19 +382,21 @@ a{color:white;text-decoration:none}
 </div>
 </div>
 
-<div class="card">
-<h2>Platby</h2>
+<div class="card" id="payments">
+<h2>Platby (všetky, vrátane šablón)</h2>
+<div class="small">Stav platí pre aktuálny cyklus ({{cycle_key}}). Úprava platby mení iba šablónu, nie stav v tomto cykle.</div>
 <div class="table-scroll">
 <table><tr><th>Názov</th><th>Suma</th><th>Deň</th><th>Frekvencia</th><th>Stav</th><th></th></tr>
 {% for x in payments %}
+{% set rx = payments_resolved[loop.index0] %}
 <tr>
 <td>{{x.get('name')}}</td><td>{{x.get('amount')}} €</td><td>{{x.get('day')}}</td>
 <td>{{freq_label.get(x.get('frequency'), x.get('frequency'))}}{% if x.get('frequency')=='custom_months' %} / {{x.get('every_months')}} mes.{% endif %}</td>
-<td><span class="badge {{state_badge_class.get(payment_state(x),'')}}">{{state_label.get(payment_state(x), payment_state(x))}}</span>{% if payment_state(x)=='deferred' and x.get('deferred_to') %}<br><span class="small">do {{x.get('deferred_to')}}</span>{% endif %}</td>
+<td><span class="badge {{state_badge_class.get(rx.state,'')}}">{{state_label.get(rx.state, rx.state)}}</span>{% if rx.state=='deferred' and rx.get('deferred_to') %}<br><span class="small">do {{rx.deferred_to}}</span>{% endif %}</td>
 <td class="actions-stack">
 <form method="post" action="/payment/state/{{loop.index0}}">
 <select name="state">
-{% for s in selectable_states %}<option value="{{s}}" {% if payment_state(x)==s %}selected{% endif %}>{{state_label.get(s,s)}}</option>{% endfor %}
+{% for s in selectable_states %}<option value="{{s}}" {% if rx.state==s %}selected{% endif %}>{{state_label.get(s,s)}}</option>{% endfor %}
 </select>
 <button class="secondary">Nastaviť</button>
 </form>
@@ -298,7 +409,7 @@ a{color:white;text-decoration:none}
 </div>
 </div>
 
-<div class="card">
+<div class="card" id="expenses">
 <h2>Výdavky navyše</h2>
 <div class="table-scroll">
 <table><tr><th>Názov</th><th>Suma</th><th>Dátum</th><th></th></tr>
@@ -323,6 +434,21 @@ a{color:white;text-decoration:none}
 </html>
 """
 
+def resolve_payments_for_cycle(payments, today):
+    """Each template resolved to its due date for `today`'s month, plus the
+    effective state/deferred_to for the current cycle. Same length/order as
+    `payments`, so `loop.index0` still lines up for the management table
+    and the per-payment action routes (/payment/state/<i>, /payment/defer/<i>)."""
+    cycle_key = pe.get_current_cycle_key(today)
+    events = pe.load_payment_events()
+    resolved = []
+    for idx, p in enumerate(payments):
+        item = dict(p)
+        item["due_date"] = ob.recurring_due_date(p, today.year, today.month)
+        item["_index"] = idx
+        resolved.append(item)
+    return pe.apply_payment_events(resolved, events, cycle_key), cycle_key
+
 def render_page(edit_income=None, edit_payment=None, edit_expense=None):
     settings = load(SETTINGS, {"account_balance":0,"use_reserve":False,"safe_min":0})
     incomes = load(INCOMES, [])
@@ -332,6 +458,26 @@ def render_page(edit_income=None, edit_payment=None, edit_expense=None):
     core = run_core()
     test_amount = request.args.get("test", "")
     test_result = run_core(["spend", test_amount]) if test_amount else ""
+
+    today = date.today()
+    payments_resolved, cycle_key = resolve_payments_for_cycle(payments, today)
+    active_resolved = [
+        p for p in payments_resolved
+        if ob.is_recurring_active(payments[p["_index"]], today.year, today.month)
+    ]
+    groups = pe.group_payments_by_status(active_resolved, today)
+
+    dash = parse_dash(core)
+    summary = {
+        "balance": dash["balance"],
+        "unpaid_total": dash["unpaid_total"],
+        "remaining": dash["remaining"],
+        "safe_to_spend": dash["money"],
+        "daily_safe_to_spend": dash["day"],
+        "next_payday": dash["next_payday"] if dash["next_payday"] != "-" else (
+            f"deň {settings.get('payday_day')}" if settings.get("payday_day") else "-"
+        ),
+    }
 
     income_form = {"name":"Výplata netto","amount":"2000","day":"15"}
     payment_form = payment_form_from_item(None)
@@ -347,13 +493,16 @@ def render_page(edit_income=None, edit_payment=None, edit_expense=None):
     return render_template_string(
         HTML,
         settings=settings, incomes=incomes, payments=payments, expenses=expenses,
-        core=core, dash=parse_dash(core), today=date.today().isoformat(),
+        core=core, dash=dash, summary=summary, today=today.isoformat(),
+        payments_resolved=payments_resolved, cycle_key=cycle_key,
+        unpaid=groups["unpaid"], deferred=groups["deferred"], paid=groups["paid"],
+        urgency_label_sk=URGENCY_LABEL_SK,
         payment_types=PAYMENT_TYPES, expense_types=EXPENSE_TYPES, freq_label=FREQ_LABEL,
         test_result=test_result, test_amount=test_amount,
         edit_income=edit_income, edit_payment=edit_payment, edit_expense=edit_expense,
         income_form=income_form, payment_form=payment_form, expense_form=expense_form,
         setup_needed=setup_needed,
-        payment_state=payment_state, state_label=STATE_LABEL,
+        state_label=STATE_LABEL,
         state_badge_class=STATE_BADGE_CLASS, selectable_states=SELECTABLE_STATES
     )
 
@@ -456,17 +605,23 @@ def payment_update(i):
 def payment_set_state(i):
     data = load(PAYMENTS, [])
     new_state = request.form.get("state", PENDING)
-    if i < len(data) and new_state in SELECTABLE_STATES:
-        data[i] = ob.set_payment_state(data[i], new_state)
-    save(PAYMENTS, data)
+    if i < len(data) and new_state in SELECTABLE_STATES and data[i].get("id"):
+        today = date.today()
+        cycle_key = pe.get_current_cycle_key(today)
+        events = pe.load_payment_events()
+        events = pe.set_payment_event(events, data[i]["id"], cycle_key, new_state)
+        pe.save_payment_events(events)
     return go_home()
 
 @app.post("/payment/defer/<int:i>")
 def payment_defer(i):
     data = load(PAYMENTS, [])
-    if i < len(data):
-        data[i] = ob.defer_payment(data[i], date.today())
-    save(PAYMENTS, data)
+    if i < len(data) and data[i].get("id"):
+        today = date.today()
+        cycle_key = pe.get_current_cycle_key(today)
+        events = pe.load_payment_events()
+        events = pe.defer_payment_event(events, data[i]["id"], cycle_key, today)
+        pe.save_payment_events(events)
     return go_home()
 
 @app.post("/payment/delete/<int:i>")
