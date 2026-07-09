@@ -6,6 +6,7 @@ from datetime import date
 import calendar
 
 from forecast import forecast as run_forecast, payment_state
+from obligations import month_key
 
 BASE = Path.home() / "BudgetPilot"
 DATA = BASE / "data"
@@ -29,6 +30,12 @@ def next_month(year, month):
     return (year + 1, 1) if month == 12 else (year, month + 1)
 
 def occurs(item, year, month):
+    if not item.get("active", True):
+        return False
+    cancelled_from = item.get("cancelled_from_month")
+    if cancelled_from and month_key(year, month) >= cancelled_from:
+        return False
+
     freq = item.get("frequency", "monthly")
     start = date.fromisoformat(item.get("start", f"{year}-01-01"))
     current = date(year, month, 1)

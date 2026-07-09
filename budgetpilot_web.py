@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 import json
 import subprocess
+import uuid
 from pathlib import Path
 from datetime import date
 from flask import Flask, request, redirect, render_template_string
+
+import obligations as ob
 
 BASE = Path.home() / "BudgetPilot"
 DATA = BASE / "data"
@@ -11,6 +14,7 @@ SETTINGS = DATA / "settings.json"
 INCOMES = DATA / "incomes.json"
 PAYMENTS = DATA / "payments.json"
 EXPENSES = DATA / "expenses.json"
+SNAPSHOTS = DATA / "snapshots.json"
 
 DATA.mkdir(parents=True, exist_ok=True)
 app = Flask(__name__)
@@ -128,6 +132,14 @@ a{color:white;text-decoration:none}
 <h1>BudgetPilot</h1>
 <div class="small">Hrubá pravda o mesiaci. Bez AI, bez blbostí.</div>
 </div>
+
+{% if setup_needed %}
+<div class="card" style="border-color:var(--orange)">
+<h2>⚠️ Dokonči nastavenie</h2>
+<div class="small">Chýba deň výplaty alebo reálny zostatok k dnešnému dňu.</div>
+<div class="btn-row"><a href="/setup"><button type="button">Otvoriť nastavenie</button></a></div>
+</div>
+{% endif %}
 
 <div class="card">
 <h2>Účet + rezerva</h2>
@@ -279,6 +291,7 @@ def render_page(edit_income=None, edit_payment=None, edit_expense=None):
     incomes = load(INCOMES, [])
     payments = load(PAYMENTS, [])
     expenses = load(EXPENSES, [])
+    setup_needed = ob.needs_setup(settings, payments)
     core = run_core()
     test_amount = request.args.get("test", "")
     test_result = run_core(["spend", test_amount]) if test_amount else ""
@@ -301,7 +314,8 @@ def render_page(edit_income=None, edit_payment=None, edit_expense=None):
         payment_types=PAYMENT_TYPES, expense_types=EXPENSE_TYPES, freq_label=FREQ_LABEL,
         test_result=test_result, test_amount=test_amount,
         edit_income=edit_income, edit_payment=edit_payment, edit_expense=edit_expense,
-        income_form=income_form, payment_form=payment_form, expense_form=expense_form
+        income_form=income_form, payment_form=payment_form, expense_form=expense_form,
+        setup_needed=setup_needed
     )
 
 @app.route("/")
@@ -423,5 +437,167 @@ def expense_delete(i):
     save(EXPENSES, data)
     return go_home()
 
+SETUP_HTML = """
+<!doctype html>
+<html lang="sk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BudgetPilot — nastavenie</title>
+<style>
+:root{--bg:#0f172a;--card:#1f2937;--line:#374151;--text:#e5e7eb;--muted:#9ca3af;--blue:#2563eb;--red:#b91c1c;--green:#22c55e;--orange:#f59e0b}
+*{box-sizing:border-box}
+body{margin:0;background:linear-gradient(135deg,#0f172a,#111827);color:var(--text);font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:18px}
+.wrap{max-width:520px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+.card{background:rgba(31,41,55,.95);border:1px solid var(--line);border-radius:18px;padding:18px;box-shadow:0 12px 30px rgba(0,0,0,.25)}
+h1{font-size:26px;margin:0 0 6px} h2{font-size:19px;margin:0 0 12px}
+label{display:block;margin-top:8px;font-size:13px;color:var(--muted)}
+input,select{width:100%;padding:11px 12px;border-radius:12px;border:1px solid #4b5563;background:#0b1220;color:var(--text);margin-top:6px}
+button{padding:10px 14px;border:0;border-radius:12px;background:var(--blue);color:white;font-weight:700;cursor:pointer}
+.danger{background:var(--red)} .secondary{background:#4b5563}
+.btn-row{display:flex;gap:8px;margin-top:10px}.btn-row button{flex:1}
+.small{font-size:13px;color:var(--muted);line-height:1.35}
+table{width:100%;border-collapse:collapse} th,td{padding:9px 6px;border-bottom:1px solid var(--line);text-align:left;font-size:13px} th{color:var(--muted)}
+.actions{display:flex;gap:6px;justify-content:flex-end}.actions form{margin:0}
+.badge{display:inline-block;padding:4px 8px;border-radius:999px;font-size:12px;background:#374151}
+.badge.ok{background:#14532d}
+a{color:white;text-decoration:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<div class="card">
+<h1>Nastavenie</h1>
+<div class="small">Toto vyplníš raz na začiatku a potom vždy, keď príde výplata.</div>
+</div>
+
+<div class="card">
+<h2>Deň výplaty a reálny zostatok</h2>
+<form method="post" action="/setup/balance">
+<label>Deň výplaty v mesiaci</label>
+<input name="payday_day" value="{{settings.get('payday_day','')}}" placeholder="napr. 15">
+<label>Reálny zostatok na účte teraz</label>
+<input name="real_balance" value="{{settings.get('real_balance', settings.get('account_balance', ''))}}" placeholder="napr. 850">
+<label>Rezerva bokom (voliteľné)</label>
+<input name="reserve_amount" value="{{settings.get('reserve_amount', settings.get('safe_min', 0))}}">
+<div class="small">Tento zostatok je od teraz zdroj pravdy pre nový cyklus — prepíše predchádzajúce odhady.</div>
+<div class="btn-row"><button>Uložiť</button></div>
+</form>
+</div>
+
+<div class="card">
+<h2>Pridať pravidelnú platbu</h2>
+<form method="post" action="/setup/recurring">
+<label>Názov</label><input name="name" placeholder="napr. škôlka">
+<label>Suma</label><input name="amount" placeholder="napr. 120">
+<label>Deň splatnosti v mesiaci</label><input name="due_day" placeholder="napr. 5">
+<label>Priorita</label>
+<select name="priority">
+<option value="mandatory">nevyhnutná</option>
+<option value="important">dôležitá</option>
+<option value="flexible">flexibilná</option>
+<option value="optional">voliteľná</option>
+</select>
+<label>Flexibilita</label>
+<select name="flexibility">
+<option value="hard_due">musí byť v termíne</option>
+<option value="can_defer">dá sa posunúť</option>
+<option value="optional">voliteľná</option>
+</select>
+<div class="btn-row"><button>Pridať platbu</button></div>
+</form>
+</div>
+
+<div class="card">
+<h2>Pravidelné platby</h2>
+<table><tr><th>Názov</th><th>Suma</th><th>Deň</th><th>Stav</th><th></th></tr>
+{% for x in recurring %}
+<tr>
+<td>{{x.get('name')}}</td><td>{{x.get('amount')}} €</td><td>{{x.get('due_day', x.get('day'))}}</td>
+<td>{% if x.get('active', True) %}<span class="badge ok">aktívna</span>{% else %}<span class="badge">zrušená</span>{% endif %}</td>
+<td class="actions">
+{% if x.get('id') %}
+<form method="post" action="/setup/recurring/toggle/{{x.get('id')}}"><button class="secondary">{% if x.get('active', True) %}Zrušiť{% else %}Obnoviť{% endif %}</button></form>
+{% endif %}
+</td>
+</tr>
+{% endfor %}
+</table>
+<div class="small">Pravidelné platby sa objavujú v prehľade každý mesiac automaticky, kým ich nezrušíš.</div>
+</div>
+
+<div class="card">
+<a href="/"><button type="button" class="secondary">Späť na prehľad</button></a>
+</div>
+
+</div>
+</body>
+</html>
+"""
+
+@app.route("/setup")
+def setup_page():
+    settings = load(SETTINGS, {"account_balance": 0, "use_reserve": False, "safe_min": 0})
+    recurring = load(PAYMENTS, [])
+    return render_template_string(SETUP_HTML, settings=settings, recurring=recurring)
+
+@app.post("/setup/balance")
+def setup_balance():
+    settings = load(SETTINGS, {"account_balance": 0, "use_reserve": False, "safe_min": 0})
+    real_balance = float(request.form.get("real_balance", 0) or 0)
+    reserve_amount = float(request.form.get("reserve_amount", 0) or 0)
+    payday_raw = request.form.get("payday_day", "").strip()
+
+    settings["real_balance"] = real_balance
+    settings["reserve_amount"] = reserve_amount
+    settings["account_balance"] = real_balance
+    settings["safe_min"] = reserve_amount
+    settings["use_reserve"] = reserve_amount > 0
+    if payday_raw:
+        settings["payday_day"] = int(payday_raw)
+    save(SETTINGS, settings)
+
+    snapshots = load(SNAPSHOTS, [])
+    snapshots.append(ob.new_cycle_snapshot(real_balance, reserve_amount))
+    save(SNAPSHOTS, snapshots)
+
+    return redirect("/setup")
+
+@app.post("/setup/recurring")
+def setup_recurring_add():
+    amount = request.form.get("amount", "").strip()
+    name = request.form.get("name", "").strip()
+    if amount and name:
+        data = load(PAYMENTS, [])
+        due_day = int(request.form.get("due_day", 1) or 1)
+        today_iso = date.today().isoformat()
+        data.append({
+            "id": uuid.uuid4().hex[:8],
+            "name": name,
+            "amount": float(amount),
+            "day": due_day,
+            "due_day": due_day,
+            "frequency": "monthly",
+            "start": today_iso,
+            "start_month": today_iso[:7],
+            "priority": request.form.get("priority", "mandatory"),
+            "flexibility": request.form.get("flexibility", "hard_due"),
+            "active": True,
+            "paid": False,
+        })
+        save(PAYMENTS, data)
+    return redirect("/setup")
+
+@app.post("/setup/recurring/toggle/<item_id>")
+def setup_recurring_toggle(item_id):
+    data = load(PAYMENTS, [])
+    for item in data:
+        if item.get("id") == item_id:
+            item["active"] = not item.get("active", True)
+            break
+    save(PAYMENTS, data)
+    return redirect("/setup")
+
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=8765, debug=False)
+    app.run(host="0.0.0.0", port=8765, debug=False)
