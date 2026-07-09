@@ -117,5 +117,56 @@ class SetupNeededTests(unittest.TestCase):
         self.assertFalse(ob.needs_setup({"payday_day": 15, "real_balance": 100}, []))
 
 
+class SettingsMergeTests(unittest.TestCase):
+    def test_settings_update_preserves_existing_payday_and_real_balance(self):
+        existing = {"payday_day": 15, "real_balance": 850.0, "reserve_amount": 100.0, "account_balance": 850.0, "use_reserve": True, "safe_min": 100.0}
+        updates = {"account_balance": 900.0, "use_reserve": False, "safe_min": 0.0}
+        merged = ob.merge_settings(existing, updates)
+        self.assertEqual(merged["payday_day"], 15)
+        self.assertEqual(merged["real_balance"], 850.0)
+        self.assertEqual(merged["reserve_amount"], 100.0)
+        self.assertEqual(merged["account_balance"], 900.0)
+        self.assertFalse(merged["use_reserve"])
+
+
+class PaymentMergeTests(unittest.TestCase):
+    def test_payment_update_preserves_metadata_not_touched_by_form(self):
+        existing = {
+            "id": "abc123", "name": "Internet", "amount": 40, "day": 24, "due_day": 24,
+            "frequency": "monthly", "start": "2026-01-24", "start_month": "2026-01",
+            "priority": "important", "flexibility": "can_defer", "active": True,
+            "paid": True,
+        }
+        form_updates = {
+            "name": "Internet", "amount": 55.0, "day": 24, "due_day": 24,
+            "frequency": "monthly", "start": "2026-01-24", "start_month": "2026-01",
+        }
+        merged = ob.merge_payment_fields(existing, form_updates)
+        self.assertEqual(merged["id"], "abc123")
+        self.assertTrue(merged["active"])
+        self.assertEqual(merged["priority"], "important")
+        self.assertEqual(merged["flexibility"], "can_defer")
+        self.assertEqual(merged["start_month"], "2026-01")
+        self.assertEqual(merged["amount"], 55.0)
+        self.assertTrue(merged["paid"])
+
+
+class EnsureRecurringCompatibleTests(unittest.TestCase):
+    def test_new_payment_contains_due_day_and_active_true(self):
+        item = ob.ensure_recurring_compatible({"name": "Nájom", "amount": 500, "day": 1, "due_day": 1, "frequency": "monthly", "start": "2026-07-01", "start_month": "2026-07"}, new_id="xyz789")
+        self.assertEqual(item["id"], "xyz789")
+        self.assertEqual(item["due_day"], 1)
+        self.assertTrue(item["active"])
+        self.assertEqual(item["priority"], "mandatory")
+        self.assertEqual(item["flexibility"], "hard_due")
+        self.assertFalse(item["paid"])
+
+    def test_existing_id_and_active_are_not_overwritten(self):
+        item = ob.ensure_recurring_compatible({"id": "keepme", "name": "Nájom", "amount": 500, "day": 1, "active": False, "priority": "flexible"}, new_id="ignored")
+        self.assertEqual(item["id"], "keepme")
+        self.assertFalse(item["active"])
+        self.assertEqual(item["priority"], "flexible")
+
+
 if __name__ == "__main__":
     unittest.main()

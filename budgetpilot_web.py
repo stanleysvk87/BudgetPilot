@@ -97,12 +97,14 @@ HTML = """
 <html lang="sk">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>BudgetPilot</title>
 <style>
 :root{--bg:#0f172a;--card:#1f2937;--line:#374151;--text:#e5e7eb;--muted:#9ca3af;--blue:#2563eb;--red:#b91c1c;--green:#22c55e;--orange:#f59e0b}
 *{box-sizing:border-box}
 body{margin:0;background:linear-gradient(135deg,#0f172a,#111827);color:var(--text);font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
 .app{display:grid;grid-template-columns:370px 1fr;gap:18px;padding:18px}
+.table-scroll{overflow-x:auto}
 .sidebar{display:flex;flex-direction:column;gap:14px}
 .card{background:rgba(31,41,55,.95);border:1px solid var(--line);border-radius:18px;padding:18px;box-shadow:0 12px 30px rgba(0,0,0,.25)}
 h1{font-size:28px;margin:0 0 6px} h2{font-size:20px;margin:0 0 14px}
@@ -122,6 +124,7 @@ pre{white-space:pre-wrap;background:#020617;border:1px solid var(--line);border-
 .badge{display:inline-block;padding:5px 9px;border-radius:999px;font-size:12px;background:#374151}
 a{color:white;text-decoration:none}
 @media(max-width:1000px){.app{grid-template-columns:1fr}.topgrid{grid-template-columns:1fr}}
+@media(max-width:600px){.app{padding:10px}table{min-width:560px}}
 </style>
 </head>
 <body>
@@ -235,6 +238,7 @@ a{color:white;text-decoration:none}
 
 <div class="card">
 <h2>Príjmy</h2>
+<div class="table-scroll">
 <table><tr><th>Názov</th><th>Suma</th><th>Deň</th><th></th></tr>
 {% for x in incomes %}
 <tr><td>{{x.get('name')}}</td><td>{{x.get('amount')}} €</td><td>{{x.get('day')}}</td>
@@ -245,9 +249,11 @@ a{color:white;text-decoration:none}
 {% endfor %}
 </table>
 </div>
+</div>
 
 <div class="card">
 <h2>Platby</h2>
+<div class="table-scroll">
 <table><tr><th>Názov</th><th>Suma</th><th>Deň</th><th>Frekvencia</th><th>Stav</th><th></th></tr>
 {% for x in payments %}
 <tr>
@@ -262,9 +268,11 @@ a{color:white;text-decoration:none}
 {% endfor %}
 </table>
 </div>
+</div>
 
 <div class="card">
 <h2>Výdavky navyše</h2>
+<div class="table-scroll">
 <table><tr><th>Názov</th><th>Suma</th><th>Dátum</th><th></th></tr>
 {% for x in expenses %}
 <tr><td>{{x.get('name')}}</td><td>{{x.get('amount')}} €</td><td>{{x.get('date')}}</td>
@@ -274,6 +282,7 @@ a{color:white;text-decoration:none}
 </td></tr>
 {% endfor %}
 </table>
+</div>
 </div>
 
 <details class="card">
@@ -336,11 +345,13 @@ def edit_expense(i):
 
 @app.post("/settings")
 def settings_save():
-    save(SETTINGS, {
+    settings = load(SETTINGS, {"account_balance":0,"use_reserve":False,"safe_min":0})
+    updates = {
         "account_balance": float(request.form.get("account_balance",0) or 0),
         "use_reserve": bool(request.form.get("use_reserve")),
         "safe_min": float(request.form.get("safe_min",0) or 0),
-    })
+    }
+    save(SETTINGS, ob.merge_settings(settings, updates))
     return go_home()
 
 @app.post("/income/add")
@@ -367,7 +378,11 @@ def income_delete(i):
     save(INCOMES, data)
     return go_home()
 
-def make_payment_from_form(existing_paid=False):
+def make_payment_from_form():
+    """Fields the main-dashboard payment form actually submits. Used both
+    to build a new payment and as the update dict when editing one — it
+    must NOT include metadata (id, priority, flexibility, active, state,
+    ...) the form doesn't expose, or an edit would clobber it."""
     typ = request.form.get("type","Iné")
     name = request.form.get("name","").strip() if typ == "Iné" else typ
     if not name: name = "Iné"
@@ -375,7 +390,16 @@ def make_payment_from_form(existing_paid=False):
     month = int(request.form.get("month",1) or 1)
     year = int(request.form.get("year",2026) or 2026)
     freq = request.form.get("frequency","monthly")
-    item = {"name":name,"amount":float(request.form.get("amount",0) or 0),"day":day,"frequency":freq,"priority":"mandatory","paid":existing_paid,"start":f"{year:04d}-{month:02d}-{day:02d}"}
+    start = f"{year:04d}-{month:02d}-{day:02d}"
+    item = {
+        "name": name,
+        "amount": float(request.form.get("amount",0) or 0),
+        "day": day,
+        "due_day": day,
+        "frequency": freq,
+        "start": start,
+        "start_month": start[:7],
+    }
     if freq == "custom_months":
         item["every_months"] = int(request.form.get("every_months",1) or 1)
     return item
@@ -385,7 +409,8 @@ def payment_add():
     amount = request.form.get("amount","").strip()
     if amount:
         data = load(PAYMENTS, [])
-        data.append(make_payment_from_form(False))
+        item = ob.ensure_recurring_compatible(make_payment_from_form(), new_id=uuid.uuid4().hex[:8])
+        data.append(item)
         save(PAYMENTS, data)
     return go_home()
 
@@ -393,8 +418,7 @@ def payment_add():
 def payment_update(i):
     data = load(PAYMENTS, [])
     if i < len(data):
-        paid = bool(data[i].get("paid", False))
-        data[i] = make_payment_from_form(paid)
+        data[i] = ob.merge_payment_fields(data[i], make_payment_from_form())
     save(PAYMENTS, data)
     return go_home()
 

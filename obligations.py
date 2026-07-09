@@ -153,3 +153,49 @@ def resolve_account_balance(settings, snapshots):
     if snap is not None:
         return snap["real_balance"]
     return float(settings.get("real_balance", settings.get("account_balance", 0)) or 0)
+
+
+# ---- Settings / payment merge helpers ----
+
+def merge_settings(existing, updates):
+    """Merge submitted settings fields into the existing settings dict.
+
+    Only the keys present in `updates` are overwritten; everything else
+    (payday_day, real_balance, reserve_amount, ...) is preserved. Prevents
+    a form that only edits account_balance/use_reserve/safe_min from
+    dropping first-run setup fields it never saw.
+    """
+    merged = dict(existing)
+    merged.update(updates)
+    return merged
+
+
+def merge_payment_fields(existing, updates):
+    """Merge submitted form fields into an existing payment, preserving
+    metadata the form doesn't touch (id, priority, flexibility, active,
+    start_month, state, cancelled_from_month, paid, ...)."""
+    merged = dict(existing)
+    merged.update(updates)
+    return merged
+
+
+def ensure_recurring_compatible(payment, new_id=None):
+    """Fill in whatever a payment needs to work with the recurring
+    obligation model, without overwriting values already present.
+    """
+    payment = dict(payment)
+    if not payment.get("id"):
+        payment["id"] = new_id
+    if "due_day" not in payment:
+        payment["due_day"] = payment.get("day", 1)
+    if "day" not in payment:
+        payment["day"] = payment["due_day"]
+    if "start_month" not in payment and payment.get("start"):
+        payment["start_month"] = payment["start"][:7]
+    payment.setdefault("frequency", "monthly")
+    payment.setdefault("priority", "mandatory")
+    payment.setdefault("flexibility", "hard_due")
+    payment.setdefault("active", True)
+    if "paid" not in payment and "state" not in payment:
+        payment["paid"] = False
+    return payment
