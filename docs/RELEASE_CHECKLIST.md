@@ -14,6 +14,7 @@ python3 -m py_compile budgetpilot.py budgetpilot_web.py first_run_wizard.py
   commit.
 - Tests should pass without skipped demo-data assumptions.
 - Runtime data should not be staged or committed.
+- After pushing to GitHub, the `Tests` GitHub Actions workflow should pass.
 
 ## Data Privacy
 
