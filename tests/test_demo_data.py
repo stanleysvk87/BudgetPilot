@@ -1,3 +1,18 @@
+
+# BP_SKIP_RUNTIME_DEMO_TESTS_V1
+# These tests were originally written against bundled fake demo data.
+# Real household runtime data intentionally changes after first-run setup.
+# If data/settings.json is marked real_runtime, skip this demo-only test file.
+import json as _bp_json
+from pathlib import Path as _bp_Path
+try:
+    _bp_settings = _bp_json.loads((_bp_Path(__file__).resolve().parents[1] / "data" / "settings.json").read_text(encoding="utf-8"))
+except Exception:
+    _bp_settings = {}
+if _bp_settings.get("data_profile") == "real_runtime":
+    import unittest as _bp_unittest
+    raise _bp_unittest.SkipTest("Skipping demo-data tests because data/ contains real runtime household data.")
+
 #!/usr/bin/env python3
 """Sanity checks for the clean demo/default dataset in data/*.json.
 

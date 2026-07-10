@@ -41,6 +41,15 @@ MONTH_NAME_SK = {
 DATA.mkdir(parents=True, exist_ok=True)
 app = Flask(__name__)
 
+from balance_first_summary import register_balance_first_summary
+register_balance_first_summary(app)
+
+from envelope_editor import register_envelope_editor
+register_envelope_editor(app)
+
+from first_run_wizard import register_first_run_wizard
+register_first_run_wizard(app)
+
 PAYMENT_TYPES = ["Hypotéka","Nájom","Elektrina","Voda","Plyn","Internet","Paušál","PZP","Havarijná poistka","STK","Olej + filtre","Diaľničná známka","Iné"]
 EXPENSE_TYPES = ["Rýchly výdavok","Potraviny","Nafta","Večera","Deti","Lekáreň","Oblečenie","Domácnosť","Iné"]
 
@@ -226,10 +235,309 @@ details.card summary{cursor:pointer;font-size:20px;font-weight:700}
 .topnav{padding:10px 12px;gap:2px 10px} .topnav a,.topnav .navlink{padding:10px 12px;font-size:15px}
 .summarygrid{grid-template-columns:1fr}
 }
+
+/* BP_APP_SHELL_PATCH_V1 */
+/* App-like shell: desktop sidebar menu, mobile drawer, card-first dashboard */
+body{background:radial-gradient(circle at top left,#1e3a8a 0,#0f172a 34%,#020617 100%);min-height:100vh}
+.menu-toggle{display:none;position:fixed;top:12px;left:12px;z-index:60;border:1px solid rgba(255,255,255,.14);background:rgba(15,23,42,.96);box-shadow:0 10px 30px rgba(0,0,0,.35)}
+.drawer-overlay{display:none}
+.topnav{
+  position:fixed;left:0;top:0;bottom:0;width:250px;z-index:50;
+  display:flex;flex-direction:column;align-items:stretch;gap:8px;
+  padding:20px 14px;background:rgba(2,6,23,.96);
+  border-right:1px solid rgba(148,163,184,.20);border-bottom:0;
+  box-shadow:18px 0 45px rgba(0,0,0,.32)
+}
+.topnav .brand{font-size:22px;margin:0 0 14px;padding:10px 12px}
+.topnav a,.topnav .navlink{
+  display:block;padding:12px 14px;border-radius:14px;
+  background:transparent;border:1px solid transparent
+}
+.topnav a:hover{background:rgba(37,99,235,.18);border-color:rgba(96,165,250,.25)}
+.topnav a:first-of-type{background:rgba(37,99,235,.28);border-color:rgba(96,165,250,.35)}
+.app{margin-left:250px;padding:20px;display:flex;flex-direction:column;gap:16px}
+.main{order:1}
+.sidebar{order:2;display:grid;grid-template-columns:repeat(2,minmax(260px,1fr));gap:14px}
+.sidebar>.card:first-child{display:none}
+.card{border-radius:22px;border-color:rgba(148,163,184,.18);box-shadow:0 18px 50px rgba(0,0,0,.28)}
+.summarygrid{grid-template-columns:repeat(4,minmax(0,1fr))}
+.summarygrid .card{min-height:120px}
+.summarygrid .metric .label{text-transform:uppercase;letter-spacing:.04em;font-size:12px}
+.summarygrid .metric .value{font-size:30px}
+.section[id="forecast3m"]{order:90}
+.actions-stack{min-width:0}
+.quick-actions{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px}
+.quick-actions form{margin:0}
+.quick-actions button{font-size:12px;padding:8px 10px;border-radius:999px;background:#334155}
+.quick-actions .pay-main button{background:#14532d}
+.quick-actions .pay-other button{background:#164e63}
+.quick-actions .pay-reserve button{background:#7c2d12}
+.quick-actions .reset button{background:#475569}
+.quick-actions .defer button{background:#78350f}
+@media(max-width:1100px){
+  .summarygrid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .sidebar{grid-template-columns:1fr}
+}
+@media(max-width:760px){
+  body{padding-top:58px}
+  .menu-toggle{display:block}
+  .drawer-overlay.open{display:block;position:fixed;inset:0;background:rgba(2,6,23,.58);z-index:45}
+  .topnav{transform:translateX(-105%);transition:transform .18s ease;width:min(82vw,310px)}
+  .topnav.open{transform:translateX(0)}
+  .topnav .brand{padding-left:48px}
+  .app{margin-left:0;padding:10px}
+  .summarygrid{grid-template-columns:1fr;gap:10px}
+  .summarygrid .card{min-height:auto;padding:16px}
+  .summarygrid .metric .value{font-size:28px}
+  .main{gap:10px}
+  .card{border-radius:18px;padding:14px}
+  h2{font-size:18px}
+  .table-scroll{overflow:visible}
+  table{min-width:0!important;width:100%;border-collapse:separate;border-spacing:0 10px}
+  thead, th{display:none}
+  tbody, tr, td{display:block;width:100%}
+  tr{background:rgba(15,23,42,.62);border:1px solid rgba(148,163,184,.18);border-radius:16px;padding:10px;margin-bottom:10px}
+  td{border:0;padding:6px 4px;font-size:14px}
+  td::before{content:attr(data-label);display:block;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px}
+  td.actions,td.actions-stack{padding-top:10px}
+  .actions,.actions-stack{justify-content:flex-start;align-items:stretch}
+  .actions form,.actions-stack form{width:100%}
+  .actions button,.actions-stack button{width:100%;margin-top:4px}
+  .quick-actions{display:grid;grid-template-columns:1fr 1fr;gap:7px}
+  .quick-actions button{width:100%;font-size:13px;padding:10px 8px}
+  .actions-stack>form[action*="/payment/state/"], .actions-stack>form[action*="/onetime/state/"]{display:none}
+  .sidebar{display:flex;flex-direction:column}
+}
+
+
+
+
+
+/* BP_UX_SAFETY_V2 */
+.safety-review{
+  order:-40;
+  margin-bottom:16px;
+  background:rgba(15,23,42,.94);
+  border:1px solid rgba(148,163,184,.24);
+  border-radius:22px;
+  padding:16px 18px;
+  box-shadow:0 18px 50px rgba(0,0,0,.30)
+}
+.safety-review h2{margin:0 0 4px;font-size:20px}
+.safety-review .hint{color:var(--muted);font-size:13px;margin-bottom:12px;line-height:1.35}
+.safety-review-list{display:flex;flex-direction:column;gap:8px}
+.safety-review-row{
+  display:grid;
+  grid-template-columns:1fr auto auto auto;
+  align-items:center;
+  gap:10px;
+  padding:10px 12px;
+  border:1px solid rgba(148,163,184,.16);
+  background:rgba(2,6,23,.46);
+  border-radius:14px
+}
+.safety-review-row.overdue{
+  border-color:rgba(239,68,68,.78);
+  background:rgba(127,29,29,.32)
+}
+.safety-review-name{font-weight:850}
+.safety-review-sum{font-weight:900;white-space:nowrap}
+.safety-review-due{
+  font-size:12px;
+  color:var(--muted);
+  white-space:nowrap;
+}
+.safety-review-row.overdue .safety-review-due{
+  color:#fecaca;
+  font-weight:800;
+}
+.safety-review-x{
+  width:34px;
+  height:34px;
+  border-radius:999px;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  font-weight:900;
+  background:rgba(127,29,29,.94);
+  color:#fee2e2;
+  border:1px solid rgba(255,255,255,.18)
+}
+.safety-review-actions form{margin:0}
+.safety-review-actions button{
+  border-radius:999px;
+  padding:8px 12px;
+  font-size:12px;
+  background:#166534
+}
+.last-update-card{
+  order:-41;
+  margin-bottom:12px;
+  border:1px solid rgba(148,163,184,.20);
+  background:rgba(15,23,42,.74);
+  border-radius:18px;
+  padding:12px 14px;
+  color:var(--muted);
+  font-size:13px;
+}
+.last-update-card strong{color:var(--text)}
+.metric .label.warning-label{color:#fbbf24!important}
+.metric .label.projection-label{color:#93c5fd!important}
+@media(max-width:760px){
+  .safety-review{border-radius:18px;padding:14px;margin-bottom:10px}
+  .safety-review-row{
+    grid-template-columns:1fr auto 36px;
+    gap:8px
+  }
+  .safety-review-due{grid-column:1 / -1}
+  .safety-review-actions{grid-column:1 / -1}
+  .safety-review-actions form{width:100%}
+  .safety-review-actions button{width:100%;padding:11px 8px}
+}
+
+
+/* BP_BALANCE_FIRST_V1 */
+.balance-first-note{
+  order:-50;
+  margin-bottom:12px;
+  border:1px solid rgba(59,130,246,.30);
+  background:rgba(30,64,175,.18);
+  border-radius:18px;
+  padding:12px 14px;
+  color:#dbeafe;
+  font-size:13px;
+}
+.balance-first-note strong{color:#fff}
+.hidden-income-card{display:none!important}
+
+
+/* BP_EDITABLE_ENVELOPES_V1 */
+.editable-envelopes{
+  order:-70;
+  margin-bottom:16px;
+  background:rgba(15,23,42,.92);
+  border:1px solid rgba(148,163,184,.24);
+  border-radius:22px;
+  padding:16px 18px;
+  box-shadow:0 18px 50px rgba(0,0,0,.28)
+}
+.editable-envelopes h2{margin:0 0 4px;font-size:20px}
+.editable-envelopes .hint{color:var(--muted);font-size:13px;margin-bottom:12px;line-height:1.35}
+.envelope-edit-row{
+  display:grid;
+  grid-template-columns:1fr 160px 110px;
+  align-items:end;
+  gap:10px;
+  padding:10px 12px;
+  margin-bottom:8px;
+  border:1px solid rgba(148,163,184,.16);
+  background:rgba(2,6,23,.46);
+  border-radius:14px
+}
+.envelope-edit-row label{
+  display:block;
+  color:var(--muted);
+  font-size:12px;
+  margin-bottom:5px
+}
+.envelope-edit-row input{
+  width:100%;
+  padding:10px 11px;
+  border-radius:12px;
+}
+.envelope-edit-row button{
+  width:100%;
+  border-radius:12px;
+  padding:10px 11px;
+}
+@media(max-width:760px){
+  .editable-envelopes{border-radius:18px;padding:14px}
+  .envelope-edit-row{grid-template-columns:1fr}
+}
+
+
+/* BP_TOP_REVIEW_DEFER_V1 */
+.safety-review-actions,
+.unpaid-confirm-actions,
+.manual-confirm-actions{
+  display:flex;
+  gap:6px;
+  flex-wrap:wrap;
+  justify-content:flex-end;
+}
+.safety-review-actions form,
+.unpaid-confirm-actions form,
+.manual-confirm-actions form{
+  margin:0;
+}
+.safety-review-actions form.bp-defer-form button,
+.unpaid-confirm-actions form.bp-defer-form button,
+.manual-confirm-actions form.bp-defer-form button{
+  background:#92400e!important;
+}
+.safety-review-actions form.bp-paid-form button,
+.unpaid-confirm-actions form.bp-paid-form button,
+.manual-confirm-actions form.bp-paid-form button{
+  background:#166534!important;
+}
+@media(max-width:760px){
+  .safety-review-actions,
+  .unpaid-confirm-actions,
+  .manual-confirm-actions{
+    justify-content:stretch;
+  }
+  .safety-review-actions form,
+  .unpaid-confirm-actions form,
+  .manual-confirm-actions form{
+    flex:1 1 48%;
+  }
+  .safety-review-actions button,
+  .unpaid-confirm-actions button,
+  .manual-confirm-actions button{
+    width:100%;
+  }
+}
+
+
+
+/* BP_TOP_REAL_OVERVIEW_V5 */
+.bp-hide-old-metrics{display:none!important}
+.real-top{
+  order:-300;margin-bottom:16px;
+  background:linear-gradient(135deg,rgba(15,23,42,.98),rgba(30,64,175,.45));
+  border:1px solid rgba(147,197,253,.35);border-radius:24px;
+  padding:16px 18px;box-shadow:0 22px 70px rgba(0,0,0,.38)
+}
+.real-top-head{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;margin-bottom:12px}
+.real-top h2{margin:0 0 4px;font-size:23px}
+.real-top .hint{color:#bfdbfe;font-size:13px;line-height:1.35}
+.real-top-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+.real-top-btn{display:inline-flex;align-items:center;justify-content:center;border-radius:999px;padding:10px 13px;font-size:13px;font-weight:850;color:white;background:#2563eb;border:1px solid rgba(255,255,255,.14);text-decoration:none}
+.real-top-btn.ocr{background:#7c3aed}.real-top-btn.env{background:#0f766e}
+.real-warning{display:none;margin:0 0 12px;padding:11px 13px;border-radius:14px;background:rgba(127,29,29,.55);border:1px solid rgba(248,113,113,.62);color:#fee2e2;font-weight:850}
+.real-warning.show{display:block}
+.real-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:12px}
+.real-metric{background:rgba(2,6,23,.43);border:1px solid rgba(148,163,184,.18);border-radius:16px;padding:12px}
+.real-label{color:#cbd5e1;font-size:12px;line-height:1.25}
+.real-value{margin-top:5px;font-size:25px;font-weight:950;white-space:nowrap}
+.real-value.good{color:#86efac}.real-value.warn{color:#fbbf24}.real-value.bad{color:#fecaca}
+.real-calc{display:grid;grid-template-columns:1fr auto;gap:8px 12px;background:rgba(2,6,23,.35);border:1px solid rgba(148,163,184,.16);border-radius:16px;padding:12px;margin-bottom:12px}
+.real-calc .amount{text-align:right;font-weight:950}
+.real-calc .total{border-top:1px solid rgba(148,163,184,.20);padding-top:8px;font-weight:950;font-size:16px}
+.real-update{display:grid;grid-template-columns:1fr 170px 120px;gap:8px;align-items:end;margin-bottom:10px}
+.real-update label{display:block;color:#cbd5e1;font-size:12px;margin-bottom:5px}
+.real-update input{width:100%;padding:10px 11px;border-radius:12px}
+.real-update button{width:100%;padding:10px 11px;border-radius:12px}
+.real-chips{display:flex;gap:8px;flex-wrap:wrap}
+.real-chip{background:rgba(2,6,23,.38);border:1px solid rgba(148,163,184,.18);border-radius:999px;padding:7px 10px;font-size:13px;color:#e5e7eb}
+.real-chip.over{background:rgba(127,29,29,.35);border-color:rgba(248,113,113,.4)}
+@media(max-width:1000px){.real-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.real-top-head{flex-direction:column}.real-top-actions{justify-content:flex-start}}
+@media(max-width:650px){.real-top{border-radius:18px;padding:14px}.real-grid{grid-template-columns:1fr}.real-update{grid-template-columns:1fr}.real-value{font-size:28px}.real-top-btn{width:100%}}
+
 </style>
 </head>
 <body>
-<nav class="topnav">
+<nav class="topnav" id="appDrawer">
 <span class="brand">BudgetPilot</span>
 <a href="#overview">Prehľad</a>
 <a href="#payments">Platby</a>
@@ -641,6 +949,620 @@ details.card summary{cursor:pointer;font-size:20px;font-weight:700}
 </details>
 </main>
 </div>
+
+<script>
+/* BP_APP_SHELL_PATCH_V1 */
+(function(){
+  function ready(fn){ if(document.readyState !== "loading") fn(); else document.addEventListener("DOMContentLoaded", fn); }
+  ready(function(){
+    const body = document.body;
+    const nav = document.querySelector(".topnav");
+    if(nav && !document.querySelector(".menu-toggle")){
+      nav.id = "appDrawer";
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "menu-toggle";
+      btn.setAttribute("aria-label", "Otvoriť menu");
+      btn.textContent = "☰";
+      const overlay = document.createElement("div");
+      overlay.className = "drawer-overlay";
+      document.body.insertBefore(overlay, document.body.firstChild);
+      document.body.insertBefore(btn, document.body.firstChild);
+      function close(){ nav.classList.remove("open"); overlay.classList.remove("open"); }
+      function toggle(){ nav.classList.toggle("open"); overlay.classList.toggle("open"); }
+      btn.addEventListener("click", toggle);
+      overlay.addEventListener("click", close);
+      nav.querySelectorAll("a").forEach(a => a.addEventListener("click", close));
+    }
+
+    // Add labels to responsive table cards from header cells.
+    document.querySelectorAll("table").forEach(function(table){
+      const labels = Array.from(table.querySelectorAll("tr:first-child th")).map(th => th.textContent.trim());
+      table.querySelectorAll("tr").forEach(function(row, idx){
+        if(idx === 0) return;
+        row.querySelectorAll("td").forEach(function(td, i){
+          if(labels[i] && !td.hasAttribute("data-label")) td.setAttribute("data-label", labels[i]);
+        });
+      });
+    });
+
+    // Replace payment dropdown-only workflow with tap-friendly direct buttons.
+    document.querySelectorAll('.actions-stack form[action*="/payment/state/"]').forEach(function(form){
+      if(form.parentElement.querySelector(".quick-actions")) return;
+      const action = form.getAttribute("action");
+      const quick = document.createElement("div");
+      quick.className = "quick-actions";
+      const items = [
+        ["paid_me", "Z účtu", "pay-main"],
+        ["paid_other", "Iný", "pay-other"],
+        ["paid_reserve", "Rezerva", "pay-reserve"],
+        ["pending", "Nezaplatené", "reset"]
+      ];
+      items.forEach(function(it){
+        const f = document.createElement("form");
+        f.method = "post";
+        f.action = action;
+        f.className = it[2];
+        f.innerHTML = '<input type="hidden" name="state" value="'+it[0]+'"><button type="submit">'+it[1]+'</button>';
+        quick.appendChild(f);
+      });
+      const defer = form.parentElement.querySelector('form[action*="/payment/defer/"]');
+      if(defer){
+        const df = defer.cloneNode(true);
+        df.className = "defer";
+        const b = df.querySelector("button");
+        if(b) b.textContent = "Odložiť";
+        quick.appendChild(df);
+        defer.style.display = "none";
+      }
+      form.parentElement.insertBefore(quick, form.parentElement.firstChild);
+    });
+  });
+})();
+</script>
+
+
+
+
+
+<script>
+/* BP_UX_SAFETY_V2 */
+(function(){
+  function ready(fn){
+    if(document.readyState !== "loading") fn();
+    else document.addEventListener("DOMContentLoaded", fn);
+  }
+
+  function norm(s){ return (s || "").trim().toLowerCase(); }
+
+  function sectionByExactHeading(text){
+    const headings = Array.from(document.querySelectorAll("h2"));
+    const h = headings.find(x => norm(x.textContent) === norm(text));
+    return h ? (h.closest(".card, .section") || h.parentElement) : null;
+  }
+
+  function todayIso(){
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth()+1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return y + "-" + m + "-" + day;
+  }
+
+  function relabelCards(){
+    document.querySelectorAll(".metric .label, .label").forEach(function(el){
+      const txt = (el.textContent || "").trim();
+
+      if(txt.toLowerCase().includes("bezpečne minúť")){
+        el.textContent = "Odhadovaný zostatok po zadaných platbách";
+        el.classList.add("warning-label");
+      }
+
+      if(txt.toLowerCase().includes("na deň do výplaty")){
+        el.textContent = "Denný odhad po zadaných platbách";
+      }
+
+      if(txt.toLowerCase().includes("odhad po najbližšej výplate")){
+        el.textContent = "Odhad po najbližšej výplate";
+        el.classList.add("projection-label");
+      }
+    });
+  }
+
+  function addLastUpdate(){
+    if(document.querySelector(".last-update-card")) return;
+
+    const card = document.createElement("div");
+    card.className = "last-update-card";
+    card.innerHTML =
+      '<strong>Posledná aktualizácia:</strong> ' +
+      'stav účtu a platby sú manuálne zadávané. ' +
+      'Ak čísla nesedia, najprv uprav aktuálny stav účtu.';
+
+    const main = document.querySelector(".main") || document.querySelector(".app") || document.body;
+    const first = main.firstElementChild;
+    if(first) main.insertBefore(card, first);
+    else main.appendChild(card);
+  }
+
+  function addUnpaidReview(){
+    if(document.querySelector(".safety-review")) return;
+
+    const unpaidSection = sectionByExactHeading("Nezaplatené / treba zaplatiť");
+    if(!unpaidSection) return;
+
+    const rows = Array.from(unpaidSection.querySelectorAll("tbody tr"));
+    const items = [];
+
+    rows.forEach(function(row){
+      const cells = Array.from(row.querySelectorAll("td"));
+      if(cells.length < 3) return;
+
+      const name = (cells[0].innerText || cells[0].textContent || "").trim();
+      const sum = (cells[1].innerText || cells[1].textContent || "").trim();
+      const due = (cells[2].innerText || cells[2].textContent || "").trim();
+
+      if(!name || !sum) return;
+
+      const payForm = Array.from(row.querySelectorAll("form")).find(function(f){
+        return !!f.querySelector('input[name="state"][value="paid_me"]');
+      });
+
+      items.push({name:name, sum:sum, due:due, payForm:payForm});
+    });
+
+    if(!items.length) return;
+
+    const now = todayIso();
+
+    items.sort(function(a,b){
+      const ao = a.due && a.due < now ? 0 : 1;
+      const bo = b.due && b.due < now ? 0 : 1;
+      if(ao !== bo) return ao - bo;
+      return (a.due || "").localeCompare(b.due || "");
+    });
+
+    const overdueCount = items.filter(x => x.due && x.due < now).length;
+
+    const card = document.createElement("section");
+    card.className = "safety-review";
+    card.innerHTML =
+      '<h2>Kontrola nezaplatených platieb</h2>' +
+      '<div class="hint">' +
+        'Každé otvorenie ukazuje iba to, čo ešte nie je potvrdené ako zaplatené. ' +
+        'Dátum splatnosti nikdy neoznačí platbu automaticky. ' +
+        (overdueCount ? '<strong style="color:#fecaca">Po splatnosti: '+overdueCount+'</strong>' : '') +
+      '</div>' +
+      '<div class="safety-review-list"></div>';
+
+    const list = card.querySelector(".safety-review-list");
+
+    items.forEach(function(item){
+      const overdue = item.due && item.due < now;
+      const r = document.createElement("div");
+      r.className = "safety-review-row" + (overdue ? " overdue" : "");
+      r.innerHTML =
+        '<div class="safety-review-name"></div>' +
+        '<div class="safety-review-sum"></div>' +
+        '<div class="safety-review-x" title="Nezaplatené">✕</div>' +
+        '<div class="safety-review-due"></div>' +
+        '<div class="safety-review-actions"></div>';
+
+      r.querySelector(".safety-review-name").textContent = item.name;
+      r.querySelector(".safety-review-sum").textContent = item.sum;
+      r.querySelector(".safety-review-due").textContent =
+        item.due ? (overdue ? "Po splatnosti: " + item.due : "Termín: " + item.due) : "Termín nezadaný";
+
+      if(item.payForm){
+        const f = item.payForm.cloneNode(true);
+        const b = f.querySelector("button");
+        if(b) b.textContent = "✓ Zaplatené";
+        r.querySelector(".safety-review-actions").appendChild(f);
+      }
+
+      list.appendChild(r);
+    });
+
+    const main = document.querySelector(".main") || document.querySelector(".app") || document.body;
+    const summary = document.querySelector(".summarygrid");
+
+    if(summary && summary.parentElement){
+      summary.parentElement.insertBefore(card, summary);
+    } else {
+      main.insertBefore(card, main.firstChild);
+    }
+  }
+
+  function markOverdueRows(){
+    const unpaidSection = sectionByExactHeading("Nezaplatené / treba zaplatiť");
+    if(!unpaidSection) return;
+
+    const now = todayIso();
+
+    unpaidSection.querySelectorAll("tbody tr").forEach(function(row){
+      const cells = Array.from(row.querySelectorAll("td"));
+      if(cells.length < 3) return;
+
+      const due = (cells[2].innerText || cells[2].textContent || "").trim();
+      if(due && due < now){
+        row.classList.add("overdue");
+        row.style.borderColor = "rgba(239,68,68,.75)";
+        row.style.background = "rgba(127,29,29,.22)";
+      }
+    });
+  }
+
+  ready(function(){
+    relabelCards();
+    addLastUpdate();
+    addUnpaidReview();
+    markOverdueRows();
+  });
+})();
+</script>
+
+
+<script>
+/* BP_BALANCE_FIRST_V1 */
+(function(){
+  function ready(fn){ if(document.readyState !== "loading") fn(); else document.addEventListener("DOMContentLoaded", fn); }
+  function txt(el){ return (el.textContent || "").trim().toLowerCase(); }
+
+  ready(function(){
+    // Hide cards/sections that are about income/payday/projection.
+    document.querySelectorAll(".card,.section").forEach(function(card){
+      const t = txt(card);
+      if(
+        t.includes("príjem") ||
+        t.includes("výplata") ||
+        t.includes("najbližšej výplate") ||
+        t.includes("ďalšia výplata")
+      ){
+        // Do not hide payment cards that only mention "do výplaty" in old labels.
+        if(!t.includes("nezaplatené / treba zaplatiť") && !t.includes("platby")){
+          card.classList.add("hidden-income-card");
+        }
+      }
+    });
+
+    // Relabel old labels defensively.
+    document.querySelectorAll(".metric .label, .label, h2, h3").forEach(function(el){
+      let v = el.textContent || "";
+      v = v.replace(/Bezpečne minúť teraz \(pred výplatou\)/gi, "Odhadovaný zostatok po zadaných platbách");
+      v = v.replace(/Bezpečne minúť/gi, "Odhadovaný zostatok");
+      v = v.replace(/Na deň do výplaty/gi, "Denný orientačný zostatok");
+      v = v.replace(/Nezaplatené do výplaty/gi, "Nezaplatené zadané platby");
+      v = v.replace(/Chýba do výplaty/gi, "Chýba po zadaných platbách");
+      v = v.replace(/Odhad po najbližšej výplate.*$/gi, "Voliteľný budúci príjem");
+      el.textContent = v;
+    });
+
+    // Add explanation banner near top.
+    if(!document.querySelector(".balance-first-note")){
+      const note = document.createElement("div");
+      note.className = "balance-first-note";
+      note.innerHTML =
+        '<strong>Balance-first režim:</strong> výplata sa nepočíta automaticky. ' +
+        'Zdroj pravdy je aktuálny stav účtu, ktorý ručne zadáš. ' +
+        'Odhad = aktuálny stav účtu mínus nezaplatené zadané platby.';
+
+      const main = document.querySelector(".main") || document.querySelector(".app") || document.body;
+      main.insertBefore(note, main.firstElementChild || null);
+    }
+  });
+})();
+</script>
+
+
+<script>
+/* BP_EDITABLE_ENVELOPES_V1 */
+(function(){
+  function ready(fn){
+    if(document.readyState !== "loading") fn();
+    else document.addEventListener("DOMContentLoaded", fn);
+  }
+
+  function eur(v){
+    return Number(v || 0).toLocaleString("sk-SK", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    }) + " €";
+  }
+
+  function addCard(data){
+    if(document.querySelector(".editable-envelopes")) return;
+
+    const envelopes = data.envelopes || [];
+    if(!envelopes.length) return;
+
+    const total = envelopes.reduce(function(sum, e){
+      return sum + Number(e.amount || 0);
+    }, 0);
+
+    const card = document.createElement("section");
+    card.className = "editable-envelopes";
+    card.innerHTML =
+      '<h2>Obálky / mesačné rozpočty</h2>' +
+      '<div class="hint">Tieto sumy sa odpočítavajú v reálnom odhade. Spolu: <strong>'+eur(total)+'</strong></div>' +
+      '<div class="editable-envelopes-list"></div>';
+
+    const list = card.querySelector(".editable-envelopes-list");
+
+    envelopes.forEach(function(e){
+      const form = document.createElement("form");
+      form.className = "envelope-edit-row";
+      form.method = "post";
+      form.action = "/api/envelopes/update";
+
+      form.innerHTML =
+        '<input type="hidden" name="id">' +
+        '<div>' +
+          '<label>Názov</label>' +
+          '<input name="name">' +
+        '</div>' +
+        '<div>' +
+          '<label>Mesačná suma</label>' +
+          '<input name="amount" inputmode="decimal" type="number" step="0.01" min="0">' +
+        '</div>' +
+        '<div>' +
+          '<button type="submit">Uložiť</button>' +
+        '</div>';
+
+      form.querySelector('input[name="id"]').value = e.id || "";
+      form.querySelector('input[name="name"]').value = e.name || "";
+      form.querySelector('input[name="amount"]').value = Number(e.amount || 0);
+
+      list.appendChild(form);
+    });
+
+    const main = document.querySelector(".main") || document.querySelector(".app") || document.body;
+
+    const afterSummary = document.querySelector(".envelope-summary");
+    if(afterSummary && afterSummary.parentElement){
+      afterSummary.parentElement.insertBefore(card, afterSummary.nextSibling);
+    } else {
+      main.insertBefore(card, main.firstElementChild || null);
+    }
+  }
+
+  ready(function(){
+    fetch("/api/envelopes", {cache:"no-store"})
+      .then(function(r){ return r.json(); })
+      .then(addCard)
+      .catch(function(err){ console.error("envelope editor failed", err); });
+  });
+})();
+</script>
+
+
+<script>
+/* BP_TOP_REVIEW_DEFER_V1 */
+(function(){
+  function ready(fn){
+    if(document.readyState !== "loading") fn();
+    else document.addEventListener("DOMContentLoaded", fn);
+  }
+
+  function cleanText(x){
+    return (x || "").replace(/\s+/g, " ").trim();
+  }
+
+  function keyFromNameSum(name, sum){
+    return cleanText(name).toLowerCase() + "||" + cleanText(sum).replace(/\s/g, "");
+  }
+
+  function findUnpaidSection(){
+    const headings = Array.from(document.querySelectorAll("h2"));
+    const h = headings.find(function(x){
+      return cleanText(x.textContent).toLowerCase() === "nezaplatené / treba zaplatiť";
+    });
+    return h ? (h.closest(".card, .section") || h.parentElement) : null;
+  }
+
+  function isPaidForm(form){
+    if(!form) return false;
+    if(form.querySelector('input[name="state"][value="paid_me"]')) return true;
+    if(form.querySelector('input[name="state"][value="paid"]')) return true;
+    const t = cleanText(form.textContent).toLowerCase();
+    return t.includes("z účtu") || t.includes("zaplaten");
+  }
+
+  function isDeferForm(form){
+    if(!form) return false;
+    if(form.querySelector('input[name="state"][value="deferred"]')) return true;
+    if(form.querySelector('select[name*="defer"]')) return true;
+    if(form.querySelector('input[name*="defer"]')) return true;
+    const t = cleanText(form.textContent).toLowerCase();
+    return t.includes("odložiť") || t.includes("odloz") || t.includes("defer");
+  }
+
+  function buildOriginalFormMap(){
+    const map = new Map();
+    const section = findUnpaidSection();
+    if(!section) return map;
+
+    Array.from(section.querySelectorAll("tbody tr")).forEach(function(row){
+      const cells = Array.from(row.querySelectorAll("td"));
+      if(cells.length < 2) return;
+
+      const name = cleanText(cells[0].innerText || cells[0].textContent);
+      const sum = cleanText(cells[1].innerText || cells[1].textContent);
+      if(!name || !sum) return;
+
+      const forms = Array.from(row.querySelectorAll("form"));
+      const paidForm = forms.find(isPaidForm);
+      const deferForm = forms.find(isDeferForm);
+
+      map.set(keyFromNameSum(name, sum), {
+        paidForm: paidForm || null,
+        deferForm: deferForm || null
+      });
+    });
+
+    return map;
+  }
+
+  function patchTopRows(){
+    const map = buildOriginalFormMap();
+    if(!map.size) return;
+
+    const rows = Array.from(document.querySelectorAll(
+      ".safety-review-row, .unpaid-confirm-row, .manual-confirm-row"
+    ));
+
+    rows.forEach(function(row){
+      if(row.dataset.deferPatched === "1") return;
+
+      const nameEl = row.querySelector(".safety-review-name, .unpaid-confirm-name, .manual-confirm-name");
+      const sumEl = row.querySelector(".safety-review-sum, .unpaid-confirm-sum, .manual-confirm-sum");
+      const actions = row.querySelector(".safety-review-actions, .unpaid-confirm-actions, .manual-confirm-actions");
+
+      if(!nameEl || !sumEl || !actions) return;
+
+      const key = keyFromNameSum(nameEl.textContent, sumEl.textContent);
+      const original = map.get(key);
+      if(!original) return;
+
+      // Existing top panel usually already has paid form, but normalize its label/class.
+      const existingForms = Array.from(actions.querySelectorAll("form"));
+      existingForms.forEach(function(f){
+        if(isPaidForm(f)){
+          f.classList.add("bp-paid-form");
+          const b = f.querySelector("button");
+          if(b) b.textContent = "✓ Zaplatené";
+        }
+      });
+
+      if(original.deferForm && !actions.querySelector(".bp-defer-form")){
+        const deferClone = original.deferForm.cloneNode(true);
+        deferClone.classList.add("bp-defer-form");
+
+        const button = deferClone.querySelector("button");
+        if(button){
+          button.textContent = "↷ Odložiť";
+          button.title = "Odložiť platbu";
+        }
+
+        actions.appendChild(deferClone);
+      }
+
+      row.dataset.deferPatched = "1";
+    });
+  }
+
+  ready(function(){
+    patchTopRows();
+
+    // Other UI patches create the top review asynchronously, so retry briefly.
+    let tries = 0;
+    const timer = setInterval(function(){
+      patchTopRows();
+      tries += 1;
+      if(tries > 20) clearInterval(timer);
+    }, 250);
+  });
+})();
+</script>
+
+
+
+<script>
+/* BP_TOP_REAL_OVERVIEW_V5 */
+(function(){
+  function ready(fn){ if(document.readyState !== "loading") fn(); else document.addEventListener("DOMContentLoaded", fn); }
+  function eur(v){ return Number(v || 0).toLocaleString("sk-SK",{minimumFractionDigits:2,maximumFractionDigits:2})+" €"; }
+  function cls(v){ const n=Number(v||0); if(n<0)return"bad"; if(n<100)return"warn"; return"good"; }
+
+  function hideOldMetricCards(){
+    document.querySelectorAll(".topgrid,.summarygrid,.envelope-summary,.fin-overview").forEach(function(el){
+      el.classList.add("bp-hide-old-metrics");
+    });
+  }
+
+  function render(data){
+    hideOldMetricCards();
+    if(document.querySelector(".real-top")) return;
+
+    const remainingEnv = Number(data.envelopes_remaining_total ?? data.envelopes_total ?? 0);
+    const finalValue = Number(data.estimated_after_payments_and_envelopes || 0);
+    const missing = Number(data.missing_after_everything || 0);
+
+    const card = document.createElement("section");
+    card.className = "real-top";
+    card.innerHTML =
+      '<div class="real-top-head">' +
+        '<div><h2>Reálny mesačný prehľad</h2>' +
+        '<div class="hint">Účet - nezaplatené platby - zostávajúce obálky. Výdavok Potraviny/Nafta znižuje príslušnú obálku.</div></div>' +
+        '<div class="real-top-actions">' +
+          '<a class="real-top-btn ocr" href="/receipts">📷 OCR bloček</a>' +
+          '<a class="real-top-btn env" href="#envelopes">✉ Upraviť obálky</a>' +
+        '</div>' +
+      '</div>' +
+      '<div class="real-warning '+(finalValue < 0 ? 'show' : '')+'">Pozor: po započítaní platieb a zostávajúcich obálok chýba '+eur(missing)+'.</div>' +
+      '<form class="real-update" method="post" action="/api/balance/update">' +
+        '<div><label>Rýchla aktualizácia stavu účtu</label><input name="account_balance" inputmode="decimal" type="number" step="0.01" value="'+Number(data.current_balance||0)+'"></div>' +
+        '<div><label>Posledná aktualizácia</label><input disabled value="'+(data.last_manual_review || "nezadané")+'"></div>' +
+        '<div><button type="submit">Uložiť stav</button></div>' +
+      '</form>' +
+      '<div class="real-grid">' +
+        '<div class="real-metric"><div class="real-label">Aktuálny stav účtu</div><div class="real-value">'+eur(data.current_balance)+'</div></div>' +
+        '<div class="real-metric"><div class="real-label">Nezaplatené platby</div><div class="real-value bad">-'+eur(data.unpaid_payments_total)+'</div></div>' +
+        '<div class="real-metric"><div class="real-label">Zostáva v obálkach</div><div class="real-value warn">-'+eur(remainingEnv)+'</div></div>' +
+        '<div class="real-metric"><div class="real-label">Reálny odhad</div><div class="real-value '+cls(finalValue)+'">'+eur(finalValue)+'</div></div>' +
+      '</div>' +
+      '<div class="real-calc">' +
+        '<div>Aktuálny stav účtu</div><div class="amount">'+eur(data.current_balance)+'</div>' +
+        '<div>- nezaplatené platby</div><div class="amount bad">-'+eur(data.unpaid_payments_total)+'</div>' +
+        '<div>- zostávajúce obálky</div><div class="amount warn">-'+eur(remainingEnv)+'</div>' +
+        '<div class="total">= reálny odhad</div><div class="amount total '+cls(finalValue)+'">'+eur(finalValue)+'</div>' +
+      '</div>' +
+      '<div class="real-chips"></div>';
+
+    const chips = card.querySelector(".real-chips");
+
+    [
+      "Obálky plán: " + eur(data.envelopes_total),
+      "Obálky minuté: " + eur(data.envelopes_spent_total || 0),
+      "Obálky ostáva: " + eur(remainingEnv),
+      "Odložené: " + eur(data.deferred_payments_total || 0),
+      "Po splatnosti: " + Number(data.overdue_count || 0)
+    ].forEach(function(text){
+      const chip=document.createElement("div");
+      chip.className="real-chip";
+      chip.textContent=text;
+      chips.appendChild(chip);
+    });
+
+    if(data.envelope_items && data.envelope_items.length){
+      data.envelope_items.forEach(function(item){
+        const chip=document.createElement("div");
+        chip.className="real-chip" + (Number(item.over||0)>0 ? " over" : "");
+        chip.textContent=item.name + ": plán " + eur(item.budget ?? item.amount) + " / minuté " + eur(item.spent || 0) + " / ostáva " + eur(item.remaining || 0);
+        chips.appendChild(chip);
+      });
+    }
+
+    const main=document.querySelector(".main") || document.querySelector(".app") || document.body;
+    main.insertBefore(card, main.firstElementChild || null);
+
+    const env=card.querySelector(".real-top-btn.env");
+    if(env){
+      env.addEventListener("click", function(e){
+        const target=document.querySelector(".editable-envelopes") || document.querySelector("#envelopes");
+        if(target){ e.preventDefault(); target.scrollIntoView({behavior:"smooth", block:"start"}); }
+      });
+    }
+  }
+
+  ready(function(){
+    hideOldMetricCards();
+    fetch("/api/balance-first-summary",{cache:"no-store"}).then(r=>r.json()).then(render).catch(console.error);
+    setTimeout(hideOldMetricCards,500);
+    setTimeout(hideOldMetricCards,1500);
+  });
+})();
+</script>
+
 </body>
 </html>
 """
