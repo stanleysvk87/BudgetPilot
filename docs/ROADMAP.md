@@ -27,11 +27,16 @@
   reachable over LAN
 - Orange Pi / systemd deployment — user-level service (no root needed),
   see [../deploy/README.md](../deploy/README.md)
+- 3-month forecast — rolling per-month income/payments/planned-balance
+  table on the dashboard, reusing `budgetpilot.calc_month()` (same
+  computation the CLI's `simulate()` already did, now also on the web).
+  Note: like `simulate()`, this does not include debts for future months —
+  only the current month's cashflow figures do.
 
 ## Next up
 
-- **3-month forecast** — extending `forecast()` beyond the current
-  now-to-next-payday window.
+Nothing currently queued — the roadmap items tracked here are all done.
+See "Later / exploratory" below for bigger, more open-ended ideas.
 
 ## Later / exploratory
 

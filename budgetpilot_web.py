@@ -11,6 +11,7 @@ import obligations as ob
 import receipts
 import payment_events as pe
 import envelopes as env
+import budgetpilot as bp
 from forecast import payment_state, PENDING, PAID_ME, PAID_OTHER, PAID_RESERVE, DEFERRED
 
 BASE = Path.home() / "BudgetPilot"
@@ -30,6 +31,11 @@ PRIORITY_LABEL = {
     "important": "dôležitá",
     "flexible": "flexibilná",
     "optional": "voliteľná",
+}
+
+MONTH_NAME_SK = {
+    1: "január", 2: "február", 3: "marec", 4: "apríl", 5: "máj", 6: "jún",
+    7: "júl", 8: "august", 9: "september", 10: "október", 11: "november", 12: "december",
 }
 
 DATA.mkdir(parents=True, exist_ok=True)
@@ -232,6 +238,7 @@ details.card summary{cursor:pointer;font-size:20px;font-weight:700}
 <a href="#envelopes">Obálky</a>
 <a href="#debts">Dlhy</a>
 <a href="#onetime">Jednorazové</a>
+<a href="#forecast3m">Výhľad</a>
 <span class="navlink disabled">Kalendár (čoskoro)</span>
 </nav>
 <div class="app">
@@ -407,6 +414,24 @@ details.card summary{cursor:pointer;font-size:20px;font-weight:700}
 {% endif %}
 <div class="card metric"><div class="label">Odhad po najbližšej výplate (vrátane budúceho príjmu)</div><div class="value">{{summary.projected_after_payday}}</div></div>
 <div class="card metric"><div class="label">Ďalšia výplata</div><div class="value">{{summary.next_payday}}</div></div>
+</div>
+
+<div class="card section" id="forecast3m">
+<h2>3-mesačný výhľad</h2>
+<div class="small">Plánovaný príjem/platby za celý mesiac — nie to isté ako "bezpečne minúť teraz". Nezahŕňa dlhy ani rezervu.</div>
+<div class="table-scroll">
+<table><tr><th>Mesiac</th><th>Plánovaný príjem</th><th>Plánované platby</th><th>Plán mesiaca</th><th>Stav</th></tr>
+{% for m in forecast_months %}
+<tr>
+<td>{{m.label}}</td>
+<td>{{"%.2f"|format(m.income_total)}} €</td>
+<td>{{"%.2f"|format(m.payment_total)}} €</td>
+<td class="{% if m.planned_month_balance < 0 %}bad{% else %}ok{% endif %}">{{"%.2f"|format(m.planned_month_balance)}} €</td>
+<td>{{m.status}}</td>
+</tr>
+{% endfor %}
+</table>
+</div>
 </div>
 
 <div class="card section">
@@ -651,6 +676,27 @@ def resolve_onetime_for_cycle(onetime, today):
             resolved.append(resolved_item)
     return pe.apply_payment_events(resolved, events, cycle_key)
 
+def three_month_forecast(today, months=3):
+    """Planned income/payments/balance for the current month plus the next
+    `months - 1`, reusing budgetpilot.calc_month() — the same per-month
+    computation the CLI's `simulate()` already prints, just not previously
+    surfaced on the web dashboard. Only the current month's figures include
+    debts (calc_month() only merges debts into the is_current_month branch,
+    same limitation simulate() already has for future months)."""
+    result = []
+    year, month = today.year, today.month
+    for _ in range(months):
+        r = bp.calc_month(year, month)
+        result.append({
+            "label": f"{MONTH_NAME_SK.get(month, month)} {year}",
+            "income_total": r["income_total"],
+            "payment_total": r["payment_total"],
+            "planned_month_balance": r["planned_month_balance"],
+            "status": r["status"],
+        })
+        year, month = bp.next_month(year, month)
+    return result
+
 def render_page(edit_income=None, edit_payment=None, edit_expense=None):
     settings = load(SETTINGS, {"account_balance":0,"use_reserve":False,"safe_min":0})
     incomes = load(INCOMES, [])
@@ -673,6 +719,8 @@ def render_page(edit_income=None, edit_payment=None, edit_expense=None):
 
     onetime = load(ONETIME, [])
     onetime_resolved = resolve_onetime_for_cycle(onetime, today)
+
+    forecast_months = three_month_forecast(today)
 
     envelope_defs = load(ENVELOPES, [])
     expenses_this_month = env.expenses_in_month(expenses, today.year, today.month)
@@ -737,6 +785,7 @@ def render_page(edit_income=None, edit_payment=None, edit_expense=None):
         debt_direction_label=DEBT_DIRECTION_LABEL,
         onetime_resolved=onetime_resolved, priority_label=PRIORITY_LABEL,
         receipt_review=receipt_review,
+        forecast_months=forecast_months,
     )
 
 @app.route("/")
