@@ -356,7 +356,7 @@ details.card summary{cursor:pointer;font-size:20px;font-weight:700}
 </div>
 
 {% if receipt_review %}
-<div class="card" style="border-color:var(--orange)">
+<div class="card" id="receipt-review" style="border-color:var(--orange)">
 <h2>Potvrdiť účtenku</h2>
 <div class="small">Odhad z OCR — over si sumu a dátum, priradí sa kategória, a až potom sa uloží ako výdavok.</div>
 <form method="post" action="/receipt/confirm">
@@ -1076,7 +1076,7 @@ def receipt_upload():
         params["guess_date"] = result["date"]
     if result.get("merchant"):
         params["guess_merchant"] = result["merchant"]
-    return redirect(f"/?{urlencode(params)}")
+    return redirect(f"/?{urlencode(params)}#receipt-review")
 
 @app.post("/receipt/confirm")
 def receipt_confirm():

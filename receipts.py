@@ -21,7 +21,8 @@ VALID_SOURCES = {SOURCE_MANUAL, SOURCE_OCR, SOURCE_IMPORT}
 
 _AMOUNT_RE = re.compile(r"(\d{1,4}[.,]\d{2})\b")
 _TOTAL_KEYWORDS = ("spolu", "celkom", "total", "suma", "k úhrade", "k uhrade")
-_DATE_DMY_RE = re.compile(r"\b(\d{2})[.\-/](\d{2})[.\-/](\d{4})\b")
+_DATE_DMY4_RE = re.compile(r"\b(\d{2})[.\-/](\d{2})[.\-/](\d{4})\b")
+_DATE_DMY2_RE = re.compile(r"\b(\d{2})[.\-/](\d{2})[.\-/](\d{2})\b")
 _DATE_YMD_RE = re.compile(r"\b(\d{4})-(\d{2})-(\d{2})\b")
 
 
@@ -62,12 +63,13 @@ def _extract_amount(raw_text):
 
 
 def _extract_date(raw_text):
-    """Best-guess date from OCR'd receipt text: the first DD.MM.YYYY (or
-    D-M-Y / D/M/Y) or YYYY-MM-DD pattern found. Same heuristic caveat as
-    _extract_amount."""
+    """Best-guess date from OCR'd receipt text: the first DD.MM.YYYY,
+    DD.MM.YY (most Slovak/Austrian receipts print a 2-digit year), or
+    YYYY-MM-DD pattern found (each also accepting '-'/'/' as separator).
+    Same heuristic caveat as _extract_amount."""
     if not raw_text:
         return None
-    m = _DATE_DMY_RE.search(raw_text)
+    m = _DATE_DMY4_RE.search(raw_text)
     if m:
         d, mo, y = m.groups()
         try:
@@ -79,6 +81,13 @@ def _extract_date(raw_text):
         y, mo, d = m.groups()
         try:
             return date(int(y), int(mo), int(d)).isoformat()
+        except ValueError:
+            pass
+    m = _DATE_DMY2_RE.search(raw_text)
+    if m:
+        d, mo, y = m.groups()
+        try:
+            return date(2000 + int(y), int(mo), int(d)).isoformat()
         except ValueError:
             pass
     return None
@@ -111,12 +120,17 @@ def parse_receipt(image_path):
     """
     try:
         import pytesseract
-        from PIL import Image
+        from PIL import Image, ImageOps
     except ImportError:
         return parse_receipt_placeholder(image_path)
 
     try:
         image = Image.open(image_path)
+        # Phone photos carry an EXIF orientation tag rather than physically
+        # rotated pixels — most viewers auto-rotate for display, but PIL's
+        # raw pixel data (and therefore Tesseract's OCR) does not unless
+        # this is applied. Without it, a portrait photo OCRs as garbage.
+        image = ImageOps.exif_transpose(image)
     except Exception:
         return parse_receipt_placeholder(image_path)
 

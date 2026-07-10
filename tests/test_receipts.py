@@ -53,11 +53,19 @@ class ExtractDateTests(unittest.TestCase):
     def test_ymd_dashed_format(self):
         self.assertEqual(rc._extract_date("2026-07-09 12:30"), "2026-07-09")
 
+    def test_dmy_dotted_two_digit_year(self):
+        # Most real Slovak/Austrian receipts print a 2-digit year.
+        self.assertEqual(rc._extract_date("02.04.26 13:26"), "2026-04-02")
+
+    def test_four_digit_year_preferred_over_two_digit_when_both_present(self):
+        self.assertEqual(rc._extract_date("09.07.2026 skladom 01.01.26"), "2026-07-09")
+
     def test_no_date_returns_none(self):
         self.assertIsNone(rc._extract_date("ďakujeme za nákup"))
 
     def test_invalid_calendar_date_is_rejected_not_crashed(self):
         self.assertIsNone(rc._extract_date("99.99.9999"))
+        self.assertIsNone(rc._extract_date("99.99.99"))
 
     def test_empty_text_returns_none(self):
         self.assertIsNone(rc._extract_date(""))
