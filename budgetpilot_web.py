@@ -354,6 +354,10 @@ body{background:radial-gradient(circle at top left,#1e3a8a 0,#0f172a 34%,#020617
   border-color:rgba(239,68,68,.78);
   background:rgba(127,29,29,.32)
 }
+.safety-review-row.due-soon{
+  border-color:rgba(245,158,11,.78);
+  background:rgba(120,53,15,.28)
+}
 .safety-review-name{font-weight:850}
 .safety-review-sum{font-weight:900;white-space:nowrap}
 .safety-review-due{
@@ -363,6 +367,10 @@ body{background:radial-gradient(circle at top left,#1e3a8a 0,#0f172a 34%,#020617
 }
 .safety-review-row.overdue .safety-review-due{
   color:#fecaca;
+  font-weight:800;
+}
+.safety-review-row.due-soon .safety-review-due{
+  color:#fed7aa;
   font-weight:800;
 }
 .safety-review-x{
@@ -649,7 +657,7 @@ body{background:radial-gradient(circle at top left,#1e3a8a 0,#0f172a 34%,#020617
 </form>
 </div>
 
-<div class="card">
+<div class="card" id="expense-quick">
 <h2>Rýchly výdavok</h2>
 <form method="post" action="/expense/add">
 <input type="hidden" name="name" value="Rýchly výdavok">
@@ -662,9 +670,10 @@ body{background:radial-gradient(circle at top left,#1e3a8a 0,#0f172a 34%,#020617
 <div class="card">
 <h2>{% if edit_expense is not none %}Upraviť výdavok{% else %}Detailný výdavok{% endif %}</h2>
 <form method="post" action="{% if edit_expense is not none %}/expense/update/{{edit_expense}}{% else %}/expense/add{% endif %}">
-<label>Typ</label>
+<label>Typ (obálka)</label>
 <select name="name">{% for t in expense_types %}<option {% if expense_form.name==t %}selected{% endif %}>{{t}}</option>{% endfor %}</select>
 <label>Suma</label><input name="amount" value="{{expense_form.amount}}">
+<label>Poznámka / obchod (voliteľné)</label><input name="merchant" value="{{expense_form.get('merchant','')}}" placeholder="napr. Lidl">
 <label>Dátum</label><input name="date" value="{{expense_form.date}}">
 <div class="btn-row">
 <button>{% if edit_expense is not none %}Uložiť úpravu{% else %}Pridať výdavok{% endif %}</button>
@@ -1170,6 +1179,7 @@ body{background:radial-gradient(circle at top left,#1e3a8a 0,#0f172a 34%,#020617
 
     const card = document.createElement("section");
     card.className = "safety-review";
+    card.id = "payment-review";
     card.innerHTML =
       '<h2>Kontrola nezaplatených platieb</h2>' +
       '<div class="hint">' +
@@ -1183,8 +1193,10 @@ body{background:radial-gradient(circle at top left,#1e3a8a 0,#0f172a 34%,#020617
 
     items.forEach(function(item){
       const overdue = item.due && item.due < now;
+      const daysUntil = item.due ? Math.round((new Date(item.due) - new Date(now)) / 86400000) : null;
+      const dueSoon = !overdue && daysUntil !== null && daysUntil >= 0 && daysUntil <= 3;
       const r = document.createElement("div");
-      r.className = "safety-review-row" + (overdue ? " overdue" : "");
+      r.className = "safety-review-row" + (overdue ? " overdue" : dueSoon ? " due-soon" : "");
       r.innerHTML =
         '<div class="safety-review-name"></div>' +
         '<div class="safety-review-sum"></div>' +
@@ -1538,7 +1550,9 @@ body{background:radial-gradient(circle at top left,#1e3a8a 0,#0f172a 34%,#020617
         '<div><h2>Reálny mesačný prehľad</h2>' +
         '<div class="hint">Účet - nezaplatené platby - zostávajúce obálky. Výdavok Potraviny/Nafta znižuje príslušnú obálku.</div></div>' +
         '<div class="real-top-actions">' +
+          '<a class="real-top-btn add" href="#expense-quick">+ Výdavok</a>' +
           '<a class="real-top-btn ocr" href="/receipts">📷 OCR bloček</a>' +
+          '<a class="real-top-btn pay" href="#payment-review">✓ Skontrolovať platby</a>' +
           '<a class="real-top-btn env" href="#envelopes">✉ Upraviť obálky</a>' +
         '</div>' +
       '</div>' +
@@ -1893,13 +1907,17 @@ def expense_add():
     amount = request.form.get("amount","").strip()
     if amount:
         name = request.form.get("name","Výdavok")
-        data = load(EXPENSES, [])
-        data.append({
+        merchant = request.form.get("merchant", "").strip()
+        item = {
             "name": name,
             "amount": float(amount),
             "date": request.form.get("date", date.today().isoformat()),
             "source": receipts.SOURCE_MANUAL,
-        })
+        }
+        if merchant:
+            item["merchant"] = merchant
+        data = load(EXPENSES, [])
+        data.append(item)
         save(EXPENSES, data)
         log_audit("expense_added", f"{name} {amount} €")
     return go_home()

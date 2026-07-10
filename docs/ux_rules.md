@@ -64,3 +64,30 @@ manual expense added.
   one column below 650px.
 - OCR ("📷 OCR bloček") linked near the top of the real-overview panel,
   not buried in the sidebar.
+
+## Payment review coloring (final polish pass)
+
+`.safety-review-row` gets a class computed client-side from each item's
+due date vs. today: `overdue` (red border) when `due < today`,
+`due-soon` (orange border) when `0 <= days_until <= 3`, otherwise
+unstyled. This is purely a CSS class on the row — it never changes
+which payments count as unpaid in `build_balance_first_summary()`.
+
+## Quick actions (final polish pass)
+
+The real-overview panel's action row now links to four anchors:
+`#expense-quick` (+ Výdavok), `/receipts` (📷 OCR bloček, purple),
+`#payment-review` (✓ Skontrolovať platby — the id set on the
+dynamically-created `.safety-review` section), `#envelopes` (✉ Upraviť
+obálky, teal). The inline balance-update form inside the same panel
+doubles as the "✎ Stav účtu" action, so no separate button is needed
+for it.
+
+## Manual expense entry
+
+The "Detailný výdavok" sidebar form is the full manual-entry flow:
+category (envelope) dropdown, amount, an optional "Poznámka / obchod"
+free-text field (stored as `expense.merchant` when present — feeds the
+same envelope alias matching OCR expenses use), and date defaulting to
+today. The plain "Rýchly výdavok" form stays a single-amount shortcut
+for the common case and does not expose category/merchant.
