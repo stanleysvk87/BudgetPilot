@@ -102,6 +102,8 @@ h2{margin:0 0 14px;font-size:21px}
 p{color:var(--muted);line-height:1.45}
 .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
 .paygrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;align-items:end;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid rgba(148,163,184,.14)}
+.paygrid.optional-row{display:none}
+.show-all-payments .paygrid.optional-row{display:grid}
 label{display:block;color:var(--muted);font-size:13px;margin:0 0 6px}
 input,select{
   width:100%; padding:12px 13px; border-radius:13px; border:1px solid var(--line);
@@ -111,12 +113,17 @@ button{
   width:100%; padding:15px 18px; border:0; border-radius:16px;
   color:white; background:var(--blue); font-weight:800; font-size:16px
 }
+.secondary-btn{background:#334155}
+.mini-status{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:14px 0 2px}
+.mini-status div{border:1px solid rgba(148,163,184,.18);border-radius:16px;padding:12px;background:rgba(2,6,23,.34)}
+.mini-status strong{display:block;font-size:18px}
+.mini-status span{display:block;color:var(--muted);font-size:12px;margin-top:3px}
 .hint{font-size:13px;color:var(--muted)}
 .warn{color:#fbbf24}
 @media(max-width:760px){
   .wrap{padding:12px}
   h1{font-size:26px}
-  .grid,.paygrid{grid-template-columns:1fr}
+  .grid,.paygrid,.mini-status{grid-template-columns:1fr}
   .card,.hero{border-radius:18px;padding:15px}
 }
 </style>
@@ -126,10 +133,14 @@ button{
   <div class="hero">
     <h1>BudgetPilot - prvé nastavenie</h1>
     <p>
-      Základ je aktuálny stav účtu, ktorý zadáš ručne. Výplata sa nepočíta automaticky,
-      pretože môže mať inú sumu aj dátum. Appka počíta odhad zo zadaného zostatku
-      mínus nezaplatené platby.
+      Začni aktuálnym stavom účtu a najväčšími pravidelnými platbami.
+      Ostatné vieš doplniť neskôr, keď bude základný prehľad sedieť.
     </p>
+    <div class="mini-status" aria-label="Kroky nastavenia">
+      <div><strong>1</strong><span>stav účtu</span></div>
+      <div><strong>2</strong><span>hlavné platby</span></div>
+      <div><strong>3</strong><span>uložiť prehľad</span></div>
+    </div>
   </div>
 
   <form method="post">
@@ -153,12 +164,12 @@ button{
     <div class="card">
       <h2>2. Trvalé platby</h2>
       <p class="hint">
-        Zadaj všetko, čo sa platí pravidelne. Platba bude nezaplatená, kým ju ručne nepotvrdíš.
-        Dátum splatnosti nikdy neznamená automaticky zaplatené.
+        Stačí zadať najväčšie pravidelné platby. Každá bude nezaplatená,
+        kým ju ručne nepotvrdíš.
       </p>
 
       {% for i in range(1, 13) %}
-      <div class="paygrid">
+      <div class="paygrid{% if i > 3 %} optional-row{% endif %}">
         <div>
           <label>Platba {{ i }} - názov</label>
           <input name="pay_name_{{ i }}" placeholder="napr. hypotéka, elektrina, internet">
@@ -208,11 +219,22 @@ button{
         </div>
       </div>
       {% endfor %}
+      <button type="button" class="secondary-btn" id="show-more-payments">Pridať ďalšie platby</button>
     </div>
 
     <button type="submit">Uložiť nastavenie</button>
   </form>
 </div>
+<script>
+document.addEventListener("DOMContentLoaded", function(){
+  var btn = document.getElementById("show-more-payments");
+  if(!btn) return;
+  btn.addEventListener("click", function(){
+    document.body.classList.add("show-all-payments");
+    btn.hidden = true;
+  });
+});
+</script>
 </body>
 </html>
 """

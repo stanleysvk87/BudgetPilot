@@ -60,9 +60,11 @@ install it (see above) or activate your virtualenv first.
 - you used the LAN IP (e.g. `192.168.x.x`), not `localhost` or `127.0.0.1`
 
 **I want to reset to a clean state**
-Use the "Vymazať všetko" action in `/settings`, or copy the fake demo files
-from `data.example/*.json` into `data/`. `data/*.json` is runtime state and
-is ignored by git, so `git checkout -- data/` is no longer the reset path.
+Use the "Vymazať všetko" action in `/settings`, or load the fake demo state
+with `python3 scripts/load_demo_data.py`. The script backs up existing
+runtime data before copying `data.example/*.json` into `data/`. `data/*.json`
+is runtime state and is ignored by git, so `git checkout -- data/` is no
+longer the reset path.
 
 **Port 8765 already in use**
 Another process is using it, or a previous `budgetpilot_web.py` run is still

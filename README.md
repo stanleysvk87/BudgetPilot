@@ -81,7 +81,7 @@ pip install -r requirements.txt
 ```
 
 On a fresh install, BudgetPilot will start at the first-run setup flow. To
-try the fake demo numbers instead, copy `data.example/*.json` into `data/`
+try the fake demo numbers instead, run `python3 scripts/load_demo_data.py`
 before starting the app.
 
 ### Run the CLI

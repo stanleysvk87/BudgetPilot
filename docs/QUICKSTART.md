@@ -16,8 +16,7 @@ payments.
 To try the fake demo data instead:
 
 ```bash
-mkdir -p data
-cp data.example/*.json data/
+python3 scripts/load_demo_data.py
 python3 budgetpilot_web.py
 ```
 
