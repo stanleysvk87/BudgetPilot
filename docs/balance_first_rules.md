@@ -137,3 +137,42 @@ See `tests/test_payment_events.py::ResolveDeferredCarryoversTests` and
 `tests/test_balance_first_summary.py` (the `test_deferred_*`/
 `test_paid_deferred_*`/`test_overdue_deferred_*` cases) for the exact
 promoted-vs-still-deferred boundary cases this implements.
+
+## First-run wizard (`/setup/full`)
+
+`first_run_wizard._needs_first_run()` gates *every* request
+(`@app.before_request`) to `/setup/full` whenever `settings.json` has
+neither `account_balance` nor `real_balance`, or `payments.json` is
+empty — income/payday is deliberately not part of that check (optional,
+per the balance-first rule above). The wizard collects the starting
+account balance + reserve, and up to 12 recurring payments, each with
+its own **frequency** (mesačne/štvrťročne/ročne/vlastné-every-X-months/
+jednorazovo) and start month — not hardcoded to monthly, matching the
+same options the regular "Pravidelná platba" form on `/payments`
+exposes.
+
+## Full reset ("Vymazať všetko", `/settings/reset`)
+
+A deliberately hard-to-trigger-by-accident action, in `/settings`'s
+collapsed "Nebezpečná zóna": the submit button starts `disabled` and
+only enables once the typed text exactly matches a required
+confirmation code (`RESET_CONFIRM_CODE`, currently `"ZMAZAT"`), plus a
+native `confirm()` dialog as a second speed bump — both client-side
+conveniences only. The server (`settings_reset()`) independently
+re-checks the same code and silently no-ops (redirects back with an
+error flag) on any mismatch; the client-side gating is never trusted
+alone for something this destructive.
+
+**Nothing is deleted before a full backup succeeds.**
+`backups/<timestamp>-full-reset/data/` gets a complete copy of the
+entire `data/` directory (every `data/*.json` file plus
+`data/receipts/*` photos) via `shutil.copytree()` *before* any live file
+is touched. After the backup, every data file is reset to its empty
+default (`settings.json` → `{}`, everything else → `[]`), receipt image
+files are deleted from the live `data/receipts/` dir (already safely
+copied into the backup), and the audit log is replaced with a single
+`full_reset` entry recording which backup directory holds the old data.
+The very next request then hits `_needs_first_run()` = `True` and gets
+redirected straight into the wizard — no separate "is this a fresh
+install" flag needed, resetting `settings.json`/`payments.json` is
+sufficient by construction.

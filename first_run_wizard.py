@@ -94,7 +94,7 @@ h1{margin:0 0 8px;font-size:32px}
 h2{margin:0 0 14px;font-size:21px}
 p{color:var(--muted);line-height:1.45}
 .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
-.paygrid{display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr;gap:8px;align-items:end;margin-bottom:8px}
+.paygrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;align-items:end;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid rgba(148,163,184,.14)}
 label{display:block;color:var(--muted);font-size:13px;margin:0 0 6px}
 input,select{
   width:100%; padding:12px 13px; border-radius:13px; border:1px solid var(--line);
@@ -165,6 +165,24 @@ button{
           <input name="pay_day_{{ i }}" type="number" min="1" max="31" placeholder="20">
         </div>
         <div>
+          <label>Mesiac štartu</label>
+          <input name="pay_month_{{ i }}" type="number" min="1" max="12" placeholder="{{ current_month_num }}">
+        </div>
+        <div>
+          <label>Opakovanie</label>
+          <select name="pay_frequency_{{ i }}">
+            <option value="monthly">mesačne</option>
+            <option value="quarterly">štvrťročne</option>
+            <option value="yearly">ročne</option>
+            <option value="custom_months">vlastné (každých X mes.)</option>
+            <option value="once">jednorazovo</option>
+          </select>
+        </div>
+        <div>
+          <label>Ak vlastné: každých X mes.</label>
+          <input name="pay_every_months_{{ i }}" type="number" min="2" max="60" placeholder="napr. 24">
+        </div>
+        <div>
           <label>Priorita</label>
           <select name="pay_priority_{{ i }}">
             <option value="mandatory">nutné</option>
@@ -207,12 +225,10 @@ def register_first_run_wizard(app):
     @app.route("/setup/full", methods=["GET", "POST"], endpoint="first_run_setup")
     def first_run_setup():
         if request.method == "GET":
-            return render_template_string(SETUP_HTML, range=range)
+            return render_template_string(SETUP_HTML, range=range, current_month_num=date.today().month)
 
         today = date.today()
         now = datetime.now().isoformat(timespec="seconds")
-        current_month = f"{today.year:04d}-{today.month:02d}"
-        current_start_date = f"{current_month}-01"
 
         balance = _to_float(request.form.get("account_balance"), 0)
         reserve = _to_float(request.form.get("reserve_amount"), 0)
@@ -244,20 +260,31 @@ def register_first_run_wizard(app):
 
             priority = request.form.get(f"pay_priority_{i}") or "mandatory"
             flexibility = request.form.get(f"pay_flexibility_{i}") or "hard_due"
+            frequency = request.form.get(f"pay_frequency_{i}") or "monthly"
+            if frequency not in {"monthly", "quarterly", "yearly", "custom_months", "once"}:
+                frequency = "monthly"
 
-            payments.append({
+            start_month_num = _to_int(request.form.get(f"pay_month_{i}"), today.month)
+            start_month_num = max(1, min(12, start_month_num))
+            start = f"{today.year:04d}-{start_month_num:02d}-{day:02d}"
+
+            item = {
                 "id": "payment-" + uuid.uuid4().hex[:8],
                 "name": name,
                 "amount": amount,
                 "day": day,
                 "due_day": day,
-                "frequency": "monthly",
-                "start": current_start_date,
-                "start_month": current_month,
+                "frequency": frequency,
+                "start": start,
+                "start_month": start[:7],
                 "priority": priority,
                 "flexibility": flexibility,
                 "active": True,
-            })
+            }
+            if frequency == "custom_months":
+                item["every_months"] = max(2, _to_int(request.form.get(f"pay_every_months_{i}"), 2))
+
+            payments.append(item)
 
         _write_json(DATA / "settings.json", settings)
         _write_json(DATA / "incomes.json", [])

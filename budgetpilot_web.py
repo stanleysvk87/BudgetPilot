@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 import json
+import shutil
 import subprocess
 import uuid
 from pathlib import Path
-from datetime import date
+from datetime import date, datetime
 from urllib.parse import urlparse
 from flask import Flask, request, redirect, render_template_string
 
@@ -534,6 +535,10 @@ button.tiny.defer-quick{padding:6px 9px;font-size:11px;border-radius:999px;backg
 .deferred-detail-row.overdue{border-color:rgba(239,68,68,.7);background:rgba(127,29,29,.22)}
 .deferred-detail-head{display:flex;justify-content:space-between;gap:10px;font-weight:800;margin-bottom:4px}
 .deferred-detail-row .pay-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.danger-zone{border-color:rgba(239,68,68,.5);background:rgba(127,29,29,.12)}
+.danger-zone summary{color:#fca5a5;font-weight:800}
+.danger-zone #reset-confirm-input{border-color:rgba(239,68,68,.5)}
+.danger-zone button.danger:disabled{opacity:.4;cursor:not-allowed}
 .edit-target-flash{animation:bp-edit-flash 2.2s ease-out}
 @keyframes bp-edit-flash{
   0%{box-shadow:0 0 0 3px rgba(37,99,235,.9);border-color:rgba(96,165,250,.9)}
@@ -1221,6 +1226,24 @@ window.BP_EDIT_TARGET = "{% if edit_payment is not none %}edit-form-payment{% el
 </table>
 </div>
 </div>
+
+<details class="card danger-zone">
+<summary>⚠️ Nebezpečná zóna — vymazať všetko</summary>
+<p class="small">
+Zmaže úplne všetky dáta (platby, výdavky, obálky, dlhy, históriu, účtenky, nastavenia) a spustí sa
+odznova prvotný sprievodca. Pred zmazaním sa <strong>automaticky uloží záloha</strong> so značkou dátumu a
+času do <code>backups/</code> na serveri — dá sa z nej v prípade potreby obnoviť ručne. Táto akcia sa
+z appky vrátiť nedá.
+</p>
+{% if request.args.get('reset_error') %}
+<div class="small" style="color:var(--red);font-weight:700">Kód sa nezhodoval, nič sa nezmazalo. Skús to znova.</div>
+{% endif %}
+<form method="post" action="/settings/reset" id="reset-form">
+<label>Na potvrdenie napíš presne: {{ reset_confirm_code }}</label>
+<input type="text" name="confirm_code" id="reset-confirm-input" autocomplete="off" placeholder="{{ reset_confirm_code }}">
+<div class="btn-row"><button type="submit" class="danger" id="reset-submit-btn" data-code="{{ reset_confirm_code }}" disabled>Vymazať všetko a začať odznova</button></div>
+</form>
+</details>
 {% endif %}
 
 {% if active_view == 'history' %}
@@ -2043,6 +2066,32 @@ window.BP_EDIT_TARGET = "{% if edit_payment is not none %}edit-form-payment{% el
 })();
 </script>
 
+<script>
+/* BP_FULL_RESET_CONFIRM_V1: "Vymazať všetko" only submits once the typed
+   text exactly matches the required code -- this is a UX convenience
+   only, the server independently re-checks the same code and rejects
+   anything else (never trust client-side-only gating for something this
+   destructive). A native confirm() is a second speed bump. */
+(function(){
+  function ready(fn){ if(document.readyState !== "loading") fn(); else document.addEventListener("DOMContentLoaded", fn); }
+  ready(function(){
+    var form = document.getElementById("reset-form");
+    var input = document.getElementById("reset-confirm-input");
+    var btn = document.getElementById("reset-submit-btn");
+    if(!form || !input || !btn) return;
+    var required = (btn.dataset.code || "").toUpperCase();
+    input.addEventListener("input", function(){
+      btn.disabled = input.value.trim().toUpperCase() !== required;
+    });
+    form.addEventListener("submit", function(e){
+      if(!window.confirm("Naozaj vymazať úplne všetko? Dá sa to vrátiť len ručne zo zálohy na serveri.")){
+        e.preventDefault();
+      }
+    });
+  });
+})();
+</script>
+
 </body>
 </html>
 """
@@ -2230,6 +2279,7 @@ def render_page(edit_income=None, edit_payment=None, edit_expense=None, active_v
         forecast_months=forecast_months,
         audit_entries=list(reversed(audit_log.load_audit_log(AUDIT_LOG_PATH)))[:30],
         audit_action_label=AUDIT_ACTION_LABEL,
+        reset_confirm_code=RESET_CONFIRM_CODE,
     )
 
 @app.route("/")
@@ -2286,6 +2336,47 @@ def settings_save():
     }
     save(SETTINGS, ob.merge_settings(settings, updates))
     return go_home()
+
+RESET_CONFIRM_CODE = "ZMAZAT"
+RESET_DATA_FILES = [
+    "settings.json", "incomes.json", "payments.json", "payment_events.json",
+    "expenses.json", "envelopes.json", "debts.json", "onetime.json",
+    "one_time_obligations.json", "snapshots.json", "receipts.json",
+]
+
+@app.post("/settings/reset")
+def settings_reset():
+    """Wipe every data file and start over from the first-run wizard.
+
+    Guarded twice: the confirmation text must match exactly (server-side,
+    never trusting the client-side JS gate alone), and nothing is deleted
+    without a full backup succeeding first — backups/<timestamp>-full-reset/
+    gets a complete copy of data/ (including receipt photos) before
+    anything in the live data/ dir is touched.
+    """
+    code = (request.form.get("confirm_code") or "").strip().upper()
+    if code != RESET_CONFIRM_CODE:
+        return redirect("/settings?reset_error=1")
+
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    backup_dir = BASE / "backups" / f"{ts}-full-reset"
+    shutil.copytree(DATA, backup_dir / "data")
+
+    for name in RESET_DATA_FILES:
+        save(DATA / name, {} if name == "settings.json" else [])
+
+    if RECEIPTS_DIR.exists():
+        for f in RECEIPTS_DIR.iterdir():
+            if f.is_file():
+                f.unlink()
+
+    save(AUDIT_LOG_PATH, [{
+        "at": datetime.now().isoformat(timespec="seconds"),
+        "action": "full_reset",
+        "detail": f"backup: {backup_dir.name}",
+    }])
+
+    return redirect("/")
 
 @app.post("/income/add")
 def income_add():
