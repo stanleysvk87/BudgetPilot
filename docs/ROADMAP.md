@@ -10,8 +10,9 @@
 - Categories / envelopes — monthly budget per category vs. actual spend vs.
   remaining, plus a 3-month historical average per category
   (`envelopes.py`)
-- Recurring obligations, one-time obligations (pure helpers), and debts
-  (pure helpers)
+- Recurring obligations, one-time obligations, and debts (`I_owe`/
+  `owed_to_me`) — full dashboard UI (add/state/defer/delete), both wired
+  into the current-cashflow forecast (`unpaid_required_before_payday`)
 - First-run setup flow (`/setup`): real balance, payday day, add/cancel
   recurring obligations
 - Payday balance snapshot as source of truth for a new cycle
@@ -26,11 +27,6 @@
 
 ## Next up
 
-- **Debts / borrowed money UI** — `obligations.py` already has the pure
-  logic (`debt_to_payment()`, `I_owe` / `owed_to_me`); no dashboard surface
-  yet.
-- **One-time obligations UI** — pure helper (`generate_onetime_for_month()`)
-  exists; no add/edit UI yet.
 - **3-month forecast** — extending `forecast()` beyond the current
   now-to-next-payday window.
 

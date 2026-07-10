@@ -181,6 +181,22 @@ class DemoEnvelopesTests(unittest.TestCase):
         self.assertFalse(any(r["over_budget"] for r in summary["rows"]))
 
 
+class DemoDebtsAndOnetimeTests(unittest.TestCase):
+    """data/debts.json holds one owed_to_me demo debt — must never affect
+    the forecast (see obligations.debt_to_payment), so the safe-to-spend
+    regression numbers in DemoDashboardCurrentPositionTests stay exact.
+    data/onetime.json is empty by design for the same reason."""
+
+    def test_demo_debt_is_owed_to_me_and_pending(self):
+        debts = load("debts.json")
+        self.assertEqual(len(debts), 1)
+        self.assertEqual(debts[0]["direction"], ob.OWED_TO_ME)
+        self.assertIsNone(ob.debt_to_payment(debts[0]))
+
+    def test_demo_onetime_is_empty(self):
+        self.assertEqual(load("onetime.json"), [])
+
+
 class DemoDataNextCycleIsolationTests(unittest.TestCase):
     """The demo payment_events.json only has entries for 2026-07 — August
     must not inherit any of July's paid/deferred states."""

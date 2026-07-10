@@ -92,6 +92,44 @@ class DebtTests(unittest.TestCase):
         self.assertIsNone(ob.debt_to_payment(debt))
 
 
+class SetDebtStateTests(unittest.TestCase):
+    def test_i_owe_can_be_marked_paid_me(self):
+        debt = {"direction": ob.I_OWE, "amount": 100, "state": PENDING}
+        result = ob.set_debt_state(debt, PAID_ME)
+        self.assertEqual(result["state"], PAID_ME)
+
+    def test_i_owe_can_be_deferred(self):
+        debt = {"direction": ob.I_OWE, "amount": 100, "state": PENDING}
+        result = ob.set_debt_state(debt, DEFERRED)
+        self.assertEqual(result["state"], DEFERRED)
+
+    def test_i_owe_cannot_be_marked_received(self):
+        debt = {"direction": ob.I_OWE, "amount": 100, "state": PENDING}
+        with self.assertRaises(ValueError):
+            ob.set_debt_state(debt, ob.RECEIVED)
+
+    def test_owed_to_me_can_be_marked_received(self):
+        debt = {"direction": ob.OWED_TO_ME, "amount": 500, "state": PENDING}
+        result = ob.set_debt_state(debt, ob.RECEIVED)
+        self.assertEqual(result["state"], ob.RECEIVED)
+
+    def test_owed_to_me_cannot_be_marked_paid_me(self):
+        debt = {"direction": ob.OWED_TO_ME, "amount": 500, "state": PENDING}
+        with self.assertRaises(ValueError):
+            ob.set_debt_state(debt, PAID_ME)
+
+    def test_unknown_direction_is_rejected(self):
+        debt = {"direction": "sideways", "amount": 10, "state": PENDING}
+        with self.assertRaises(ValueError):
+            ob.set_debt_state(debt, PENDING)
+
+    def test_other_metadata_preserved(self):
+        debt = {"direction": ob.I_OWE, "amount": 100, "state": PENDING, "name": "Peter", "note": "pôžička na auto"}
+        result = ob.set_debt_state(debt, PAID_ME)
+        self.assertEqual(result["name"], "Peter")
+        self.assertEqual(result["note"], "pôžička na auto")
+
+
 class SnapshotTests(unittest.TestCase):
     def test_payday_real_balance_snapshot_is_source_of_truth(self):
         settings = {"account_balance": 150.0, "real_balance": 150.0}

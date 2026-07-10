@@ -110,6 +110,29 @@ def debt_to_payment(debt):
     }
 
 
+def set_debt_state(debt, state):
+    """Return `debt` with its state changed, validated against its direction.
+
+    I_owe debts follow pending -> paid_me (repaid) or deferred (pushed
+    out). owed_to_me debts follow pending -> received (money actually
+    arrived). The two directions have different real-world meanings and
+    must not be conflated — e.g. 'received' on an I_owe debt would be
+    nonsensical, so it's rejected rather than silently accepted.
+    """
+    direction = debt.get("direction")
+    if direction == I_OWE:
+        allowed = {PENDING, PAID_ME, DEFERRED}
+    elif direction == OWED_TO_ME:
+        allowed = {PENDING, RECEIVED}
+    else:
+        raise ValueError(f"unknown debt direction: {direction!r}")
+    if state not in allowed:
+        raise ValueError(f"state {state!r} not valid for direction {direction!r}")
+    merged = dict(debt)
+    merged["state"] = state
+    return merged
+
+
 # ---- First-run setup ----
 
 def needs_setup(settings, recurring):

@@ -20,6 +20,15 @@ PAYMENTS = DATA / "payments.json"
 EXPENSES = DATA / "expenses.json"
 SNAPSHOTS = DATA / "snapshots.json"
 ENVELOPES = DATA / "envelopes.json"
+DEBTS = DATA / "debts.json"
+ONETIME = DATA / "onetime.json"
+
+PRIORITY_LABEL = {
+    "mandatory": "nevyhnutná",
+    "important": "dôležitá",
+    "flexible": "flexibilná",
+    "optional": "voliteľná",
+}
 
 DATA.mkdir(parents=True, exist_ok=True)
 app = Flask(__name__)
@@ -58,6 +67,23 @@ URGENCY_LABEL_SK = {
     pe.DUE_TODAY: "Dnes",
     pe.SOON: "Čoskoro",
     pe.LATER: "Neskôr",
+}
+
+DEBT_STATE_LABEL = {
+    PENDING: "Nesplatené",
+    PAID_ME: "Splatené",
+    DEFERRED: "Odložené",
+    ob.RECEIVED: "Prijaté",
+}
+# Selectable states per direction — I_owe follows the payment lifecycle,
+# owed_to_me only ever resolves to "received" (see obligations.set_debt_state).
+DEBT_STATES_BY_DIRECTION = {
+    ob.I_OWE: [PENDING, PAID_ME, DEFERRED],
+    ob.OWED_TO_ME: [PENDING, ob.RECEIVED],
+}
+DEBT_DIRECTION_LABEL = {
+    ob.I_OWE: "Dlžím ja",
+    ob.OWED_TO_ME: "Dlžia mne",
 }
 
 def load(path, default):
@@ -202,7 +228,8 @@ details.card summary{cursor:pointer;font-size:20px;font-weight:700}
 <a href="#expenses">Výdavky</a>
 <a href="#settings">Nastavenia</a>
 <a href="#envelopes">Obálky</a>
-<span class="navlink disabled">Dlhy (čoskoro)</span>
+<a href="#debts">Dlhy</a>
+<a href="#onetime">Jednorazové</a>
 <span class="navlink disabled">Kalendár (čoskoro)</span>
 </nav>
 <div class="app">
@@ -274,6 +301,18 @@ details.card summary{cursor:pointer;font-size:20px;font-weight:700}
 </div>
 
 <div class="card">
+<h2>Jednorazová platba</h2>
+<form method="post" action="/onetime/add">
+<label>Názov</label><input name="name" placeholder="napr. servis auta">
+<label>Suma</label><input name="amount" placeholder="napr. 180">
+<label>Termín splatnosti</label><input name="due_date" value="{{today}}">
+<label>Priorita</label>
+<select name="priority">{% for p, label in priority_label.items() %}<option value="{{p}}">{{label}}</option>{% endfor %}</select>
+<div class="btn-row"><button>Pridať jednorazovú platbu</button></div>
+</form>
+</div>
+
+<div class="card">
 <h2>Rýchly výdavok</h2>
 <form method="post" action="/expense/add">
 <input type="hidden" name="name" value="Rýchly výdavok">
@@ -305,6 +344,21 @@ details.card summary{cursor:pointer;font-size:20px;font-weight:700}
 <label>Mesačný limit</label><input name="monthly_limit" placeholder="napr. 200">
 <div class="small">Ak už na túto kategóriu obálka existuje, uloženie iba prepíše jej limit.</div>
 <div class="btn-row"><button>Uložiť obálku</button></div>
+</form>
+</div>
+
+<div class="card">
+<h2>Dlh</h2>
+<form method="post" action="/debt/add">
+<label>Názov / komu-od koho</label><input name="name" placeholder="napr. Peter, pôžička na auto">
+<label>Suma</label><input name="amount" placeholder="napr. 300">
+<label>Smer</label>
+<select name="direction">
+{% for d, label in debt_direction_label.items() %}<option value="{{d}}">{{label}}</option>{% endfor %}
+</select>
+<label>Termín splatnosti</label><input name="due_date" value="{{today}}">
+<label>Poznámka</label><input name="note" placeholder="voliteľné">
+<div class="btn-row"><button>Pridať dlh</button></div>
 </form>
 </div>
 </aside>
@@ -428,6 +482,32 @@ details.card summary{cursor:pointer;font-size:20px;font-weight:700}
 </div>
 </div>
 
+<div class="card section" id="onetime">
+<h2>Jednorazové platby</h2>
+<div class="small">Platí, iba kým nastane jej termín v tomto mesiaci. Ráta sa do bezpečne minúť rovnako ako pravidelná platba.</div>
+{% if onetime_resolved %}
+<div class="table-scroll">
+<table><tr><th>Názov</th><th>Suma</th><th>Termín</th><th>Priorita</th><th>Stav</th><th></th></tr>
+{% for x in onetime_resolved %}
+<tr>
+<td>{{x.name}}</td><td>{{x.amount}} €</td><td>{{x.due_date}}</td><td>{{priority_label.get(x.get('priority'), x.get('priority','-'))}}</td>
+<td><span class="badge {{state_badge_class.get(x.state,'')}}">{{state_label.get(x.state, x.state)}}</span>{% if x.state=='deferred' and x.get('deferred_to') %}<br><span class="small">do {{x.deferred_to}}</span>{% endif %}</td>
+<td class="actions-stack">
+<form method="post" action="/onetime/state/{{x._index}}">
+<select name="state">
+{% for s in selectable_states %}<option value="{{s}}" {% if x.state==s %}selected{% endif %}>{{state_label.get(s,s)}}</option>{% endfor %}
+</select>
+<button class="secondary">Nastaviť</button>
+</form>
+<form method="post" action="/onetime/defer/{{x._index}}"><button class="secondary">Odložiť o 7 dní</button></form>
+<form method="post" action="/onetime/delete/{{x._index}}"><button class="danger">Zmazať</button></form>
+</td></tr>
+{% endfor %}
+</table>
+</div>
+{% else %}<div class="small">Zatiaľ žiadna jednorazová platba tento mesiac.</div>{% endif %}
+</div>
+
 <div class="card" id="expenses">
 <h2>Výdavky navyše</h2>
 <div class="table-scroll">
@@ -469,6 +549,34 @@ details.card summary{cursor:pointer;font-size:20px;font-weight:700}
 {% else %}<div class="small">Zatiaľ žiadna obálka. Pridaj limit pre kategóriu vľavo.</div>{% endif %}
 </div>
 
+<div class="card section" id="debts">
+<h2>Dlhy</h2>
+<div class="small">Dlžím ja: znižuje bezpečne minúť, keď je nesplatené a v termíne. Dlžia mne: len sledovanie, nezvyšuje bezpečne minúť, kým to reálne nepríde na účet.</div>
+{% if debts %}
+<div class="table-scroll">
+<table><tr><th>Smer</th><th>Názov</th><th>Suma</th><th>Termín</th><th>Stav</th><th></th></tr>
+{% for d in debts %}
+<tr>
+<td>{{debt_direction_label.get(d.direction, d.direction)}}</td>
+<td>{{d.name}}{% if d.get('note') %}<br><span class="small">{{d.note}}</span>{% endif %}</td>
+<td>{{"%.2f"|format(d.amount)}} €</td>
+<td>{{d.get('due_date','-')}}</td>
+<td><span class="badge {% if d.state in ('paid_me','received') %}ok{% elif d.state=='deferred' %}warn{% endif %}">{{debt_state_label.get(d.state, d.state)}}</span></td>
+<td class="actions-stack">
+<form method="post" action="/debt/state/{{loop.index0}}">
+<select name="state">
+{% for s in debt_states_by_direction.get(d.direction, []) %}<option value="{{s}}" {% if d.state==s %}selected{% endif %}>{{debt_state_label.get(s,s)}}</option>{% endfor %}
+</select>
+<button class="secondary">Nastaviť</button>
+</form>
+<form method="post" action="/debt/delete/{{loop.index0}}"><button class="danger">Zmazať</button></form>
+</td></tr>
+{% endfor %}
+</table>
+</div>
+{% else %}<div class="small">Zatiaľ žiadny dlh.</div>{% endif %}
+</div>
+
 <details class="card">
 <summary>Technický výstup</summary>
 <pre>{{core}}</pre>
@@ -494,6 +602,22 @@ def resolve_payments_for_cycle(payments, today):
         resolved.append(item)
     return pe.apply_payment_events(resolved, events, cycle_key), cycle_key
 
+def resolve_onetime_for_cycle(onetime, today):
+    """One-time obligations due in `today`'s month, resolved to their
+    effective state for the current cycle. `_index` preserves the position
+    in the full onetime.json list (which may hold obligations due in other
+    months too), so the per-item action routes edit the right entry."""
+    cycle_key = pe.get_current_cycle_key(today)
+    events = pe.load_payment_events()
+    resolved = []
+    for idx, item in enumerate(onetime):
+        if ob.onetime_due_in_month(item, today.year, today.month):
+            resolved_item = dict(item)
+            resolved_item["due_date"] = date.fromisoformat(item["due_date"])
+            resolved_item["_index"] = idx
+            resolved.append(resolved_item)
+    return pe.apply_payment_events(resolved, events, cycle_key)
+
 def render_page(edit_income=None, edit_payment=None, edit_expense=None):
     settings = load(SETTINGS, {"account_balance":0,"use_reserve":False,"safe_min":0})
     incomes = load(INCOMES, [])
@@ -511,6 +635,11 @@ def render_page(edit_income=None, edit_payment=None, edit_expense=None):
         if ob.is_recurring_active(payments[p["_index"]], today.year, today.month)
     ]
     groups = pe.group_payments_by_status(active_resolved, today)
+
+    debts = load(DEBTS, [])
+
+    onetime = load(ONETIME, [])
+    onetime_resolved = resolve_onetime_for_cycle(onetime, today)
 
     envelope_defs = load(ENVELOPES, [])
     expenses_this_month = env.expenses_in_month(expenses, today.year, today.month)
@@ -559,6 +688,10 @@ def render_page(edit_income=None, edit_payment=None, edit_expense=None):
         state_label=STATE_LABEL,
         state_badge_class=STATE_BADGE_CLASS, selectable_states=SELECTABLE_STATES,
         envelope_rows=envelope_rows, envelope_totals=envelope_totals,
+        debts=debts, debt_state_label=DEBT_STATE_LABEL,
+        debt_states_by_direction=DEBT_STATES_BY_DIRECTION,
+        debt_direction_label=DEBT_DIRECTION_LABEL,
+        onetime_resolved=onetime_resolved, priority_label=PRIORITY_LABEL,
     )
 
 @app.route("/")
@@ -741,6 +874,92 @@ def envelope_delete(i):
     data = load(ENVELOPES, [])
     if i < len(data): data.pop(i)
     save(ENVELOPES, data)
+    return go_home()
+
+@app.post("/debt/add")
+def debt_add():
+    amount = request.form.get("amount", "").strip()
+    name = request.form.get("name", "").strip()
+    direction = request.form.get("direction", ob.I_OWE)
+    if amount and name and direction in DEBT_STATES_BY_DIRECTION:
+        data = load(DEBTS, [])
+        data.append({
+            "id": uuid.uuid4().hex[:8],
+            "name": name,
+            "amount": float(amount),
+            "direction": direction,
+            "due_date": request.form.get("due_date", date.today().isoformat()),
+            "state": PENDING,
+            "note": request.form.get("note", "").strip(),
+        })
+        save(DEBTS, data)
+    return go_home()
+
+@app.post("/debt/state/<int:i>")
+def debt_set_state(i):
+    data = load(DEBTS, [])
+    new_state = request.form.get("state", PENDING)
+    if i < len(data):
+        try:
+            data[i] = ob.set_debt_state(data[i], new_state)
+            save(DEBTS, data)
+        except ValueError:
+            pass
+    return go_home()
+
+@app.post("/debt/delete/<int:i>")
+def debt_delete(i):
+    data = load(DEBTS, [])
+    if i < len(data): data.pop(i)
+    save(DEBTS, data)
+    return go_home()
+
+@app.post("/onetime/add")
+def onetime_add():
+    amount = request.form.get("amount", "").strip()
+    name = request.form.get("name", "").strip()
+    due_date_raw = request.form.get("due_date", "").strip()
+    if amount and name and due_date_raw:
+        data = load(ONETIME, [])
+        data.append({
+            "id": uuid.uuid4().hex[:8],
+            "name": name,
+            "amount": float(amount),
+            "due_date": due_date_raw,
+            "priority": request.form.get("priority", "mandatory"),
+            "flexibility": "hard_due",
+        })
+        save(ONETIME, data)
+    return go_home()
+
+@app.post("/onetime/state/<int:i>")
+def onetime_set_state(i):
+    data = load(ONETIME, [])
+    new_state = request.form.get("state", PENDING)
+    if i < len(data) and new_state in SELECTABLE_STATES and data[i].get("id"):
+        today = date.today()
+        cycle_key = pe.get_current_cycle_key(today)
+        events = pe.load_payment_events()
+        events = pe.set_payment_event(events, data[i]["id"], cycle_key, new_state)
+        pe.save_payment_events(events)
+    return go_home()
+
+@app.post("/onetime/defer/<int:i>")
+def onetime_defer(i):
+    data = load(ONETIME, [])
+    if i < len(data) and data[i].get("id"):
+        today = date.today()
+        cycle_key = pe.get_current_cycle_key(today)
+        events = pe.load_payment_events()
+        events = pe.defer_payment_event(events, data[i]["id"], cycle_key, today)
+        pe.save_payment_events(events)
+    return go_home()
+
+@app.post("/onetime/delete/<int:i>")
+def onetime_delete(i):
+    data = load(ONETIME, [])
+    if i < len(data): data.pop(i)
+    save(ONETIME, data)
     return go_home()
 
 SETUP_HTML = """
