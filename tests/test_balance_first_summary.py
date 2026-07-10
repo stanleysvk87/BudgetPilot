@@ -53,15 +53,70 @@ class BalanceFirstSummaryTests(unittest.TestCase):
         self.assertEqual(result["unpaid_payments_total"], 200)
         self.assertEqual(result["estimated_after_payments"], 800)
 
-    def test_deferred_payment_excluded_from_unpaid_total(self):
+    def test_deferred_payment_to_a_future_month_excluded_from_unpaid_total(self):
+        cycle = f"{TODAY.year:04d}-{TODAY.month:02d}"
+        next_month = (TODAY.replace(day=28) + timedelta(days=10)).isoformat()
         _write(self.data, "payments.json", [self._payment("p1", 200, TODAY.day)])
         _write(self.data, "payment_events.json", [
-            {"payment_id": "p1", "cycle_key": f"{TODAY.year:04d}-{TODAY.month:02d}", "state": "deferred"}
+            {"payment_id": "p1", "cycle_key": cycle, "state": "deferred", "deferred_to": next_month}
         ])
         result = bfs.build_balance_first_summary()
         self.assertEqual(result["unpaid_payments_total"], 0)
         self.assertEqual(result["deferred_payments_total"], 200)
         self.assertEqual(result["estimated_after_payments"], 1000)
+
+    def test_deferred_payment_due_this_month_counted_as_unpaid(self):
+        # deferred_to falls within the current month: must be active
+        # unpaid, not hidden under "deferred" (rule 2).
+        cycle = f"{TODAY.year:04d}-{TODAY.month:02d}"
+        _write(self.data, "payments.json", [self._payment("p1", 200, TODAY.day)])
+        _write(self.data, "payment_events.json", [
+            {"payment_id": "p1", "cycle_key": cycle, "state": "deferred", "deferred_to": TODAY.isoformat()}
+        ])
+        result = bfs.build_balance_first_summary()
+        self.assertEqual(result["unpaid_payments_total"], 200)
+        self.assertEqual(result["deferred_payments_total"], 0)
+
+    def test_overdue_deferred_payment_counted_as_unpaid_and_overdue(self):
+        cycle = f"{TODAY.year:04d}-{TODAY.month:02d}"
+        past = (TODAY - timedelta(days=3)).isoformat()
+        _write(self.data, "payments.json", [self._payment("p1", 200, TODAY.day)])
+        _write(self.data, "payment_events.json", [
+            {"payment_id": "p1", "cycle_key": cycle, "state": "deferred", "deferred_to": past}
+        ])
+        result = bfs.build_balance_first_summary()
+        self.assertEqual(result["unpaid_payments_total"], 200)
+        self.assertEqual(result["overdue_count"], 1)
+
+    def test_deferred_carryover_appears_in_target_month_without_losing_natural_occurrence(self):
+        # A payment deferred from an earlier cycle into this one shows up
+        # as unpaid here, on top of — never instead of — its own natural
+        # pending occurrence this month (rule 5: no silent merge/loss).
+        cycle = f"{TODAY.year:04d}-{TODAY.month:02d}"
+        prev = TODAY.replace(day=1) - timedelta(days=1)
+        prev_cycle = f"{prev.year:04d}-{prev.month:02d}"
+        _write(self.data, "payments.json", [self._payment("p1", 200, TODAY.day)])
+        _write(self.data, "payment_events.json", [
+            {"payment_id": "p1", "cycle_key": prev_cycle, "state": "deferred", "deferred_to": TODAY.isoformat()}
+        ])
+        result = bfs.build_balance_first_summary()
+        # 200 from this month's own natural occurrence + 200 carried over
+        self.assertEqual(result["unpaid_payments_total"], 400)
+        self.assertEqual(result["unpaid_payment_count"], 2)
+
+    def test_paid_deferred_item_excluded_from_unpaid_and_deferred_totals(self):
+        cycle = f"{TODAY.year:04d}-{TODAY.month:02d}"
+        prev = TODAY.replace(day=1) - timedelta(days=1)
+        prev_cycle = f"{prev.year:04d}-{prev.month:02d}"
+        _write(self.data, "payments.json", [self._payment("p1", 200, TODAY.day)])
+        _write(self.data, "payment_events.json", [
+            {"payment_id": "p1", "cycle_key": prev_cycle, "state": "paid_me", "deferred_to": TODAY.isoformat()}
+        ])
+        result = bfs.build_balance_first_summary()
+        # Only this month's own natural pending occurrence remains — the
+        # now-paid carryover contributes nothing to either bucket.
+        self.assertEqual(result["unpaid_payments_total"], 200)
+        self.assertEqual(result["deferred_payments_total"], 0)
 
     def test_paid_payment_excluded_from_unpaid_total(self):
         _write(self.data, "payments.json", [self._payment("p1", 200, TODAY.day)])

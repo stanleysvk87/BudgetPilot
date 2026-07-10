@@ -194,5 +194,129 @@ class GroupPaymentsByStatusTests(unittest.TestCase):
         self.assertEqual(groups["unpaid"][0]["urgency"], pe.OVERDUE)
 
 
+class SetPaymentEventCreatedAtTests(unittest.TestCase):
+    def test_created_at_set_on_first_write(self):
+        from datetime import datetime
+        events = pe.set_payment_event([], "p1", "2026-07", PAID_ME, now=datetime(2026, 7, 9))
+        event = pe.get_payment_event(events, "p1", "2026-07")
+        self.assertIn("created_at", event)
+        self.assertIn("updated_at", event)
+
+    def test_created_at_preserved_across_updates(self):
+        from datetime import datetime
+        events = pe.set_payment_event([], "p1", "2026-07", PENDING, now=datetime(2026, 7, 1, 9, 0))
+        first_created = pe.get_payment_event(events, "p1", "2026-07")["created_at"]
+        events = pe.set_payment_event(events, "p1", "2026-07", PAID_ME, now=datetime(2026, 7, 9, 10, 0))
+        event = pe.get_payment_event(events, "p1", "2026-07")
+        self.assertEqual(event["created_at"], first_created)
+        self.assertNotEqual(event["updated_at"], first_created)
+
+
+class DeferPaymentToDateTests(unittest.TestCase):
+    def test_defer_requires_a_date_object(self):
+        events = pe.defer_payment_to_date([], "p1", "2026-07", date(2026, 8, 15))
+        event = pe.get_payment_event(events, "p1", "2026-07")
+        self.assertEqual(event["state"], DEFERRED)
+        self.assertEqual(event["deferred_to"], "2026-08-15")
+
+    def test_redefer_reuses_the_same_event_slot(self):
+        # Re-deferring (changing the date on an existing deferred event)
+        # must update the SAME (payment_id, cycle_key) event, never create
+        # a second one for the same payment — otherwise resolve_deferred_
+        # carryovers() would show it twice.
+        events = pe.defer_payment_to_date([], "p1", "2026-07", date(2026, 8, 15))
+        events = pe.defer_payment_to_date(events, "p1", "2026-07", date(2026, 8, 20))
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["deferred_to"], "2026-08-20")
+
+    def test_optional_note_stored(self):
+        events = pe.defer_payment_to_date([], "p1", "2026-07", date(2026, 8, 15), note="čaká sa na výplatu")
+        event = pe.get_payment_event(events, "p1", "2026-07")
+        self.assertEqual(event["note"], "čaká sa na výplatu")
+
+
+class ResolveDeferredCarryoversTests(unittest.TestCase):
+    PAYMENTS = [TEMPLATE, {**TEMPLATE, "id": "p2", "name": "O2", "amount": 25.0}]
+
+    def test_future_month_deferral_excluded_from_unpaid(self):
+        # Deferred in July, target date in August: while still viewing
+        # July, this must not count as unpaid.
+        events = pe.defer_payment_to_date([], "p1", "2026-07", date(2026, 8, 15))
+        unpaid, deferred = pe.resolve_deferred_carryovers(self.PAYMENTS, events, "2026-07", date(2026, 7, 20))
+        self.assertEqual(unpaid, [])
+        self.assertEqual(len(deferred), 1)
+        self.assertEqual(deferred[0]["id"], "p1")
+
+    def test_deferred_to_current_month_is_active_unpaid(self):
+        # Deferred earlier this same cycle to a later date still within
+        # the same month: must show as active unpaid now (rule 2), not
+        # stay parked as "deferred" until that exact day.
+        events = pe.defer_payment_to_date([], "p1", "2026-07", date(2026, 7, 25))
+        unpaid, deferred = pe.resolve_deferred_carryovers(self.PAYMENTS, events, "2026-07", date(2026, 7, 20))
+        self.assertEqual(deferred, [])
+        self.assertEqual(len(unpaid), 1)
+        self.assertEqual(unpaid[0]["id"], "p1")
+        self.assertNotEqual(unpaid[0]["urgency"], pe.OVERDUE)
+        self.assertEqual(unpaid[0]["carryover_label"], "Odložené z minulého obdobia")
+
+    def test_overdue_deferred_is_active_unpaid_and_overdue(self):
+        events = pe.defer_payment_to_date([], "p1", "2026-07", date(2026, 7, 10))
+        unpaid, deferred = pe.resolve_deferred_carryovers(self.PAYMENTS, events, "2026-07", date(2026, 7, 20))
+        self.assertEqual(len(unpaid), 1)
+        self.assertEqual(unpaid[0]["urgency"], pe.OVERDUE)
+
+    def test_carryover_promoted_in_target_month_with_origin_cycle_label(self):
+        # Deferred from July into August: while viewing August, it must
+        # appear as unpaid, labeled with its origin cycle.
+        events = pe.defer_payment_to_date([], "p1", "2026-07", date(2026, 8, 15))
+        unpaid, deferred = pe.resolve_deferred_carryovers(self.PAYMENTS, events, "2026-08", date(2026, 8, 20))
+        self.assertEqual(len(unpaid), 1)
+        self.assertEqual(unpaid[0]["origin_cycle_key"], "2026-07")
+        self.assertEqual(unpaid[0]["carryover_label"], "Odložené z 2026-07")
+
+    def test_carryover_does_not_replace_targets_own_natural_occurrence(self):
+        # A carryover from July landing in August is an ADDITIONAL item —
+        # resolve_deferred_carryovers() never touches August's own fresh
+        # event/pending resolution for the same payment_id, so combining
+        # its output with apply_payment_events()'s own August result must
+        # yield two distinct entries for "p1", not one.
+        events = pe.defer_payment_to_date([], "p1", "2026-07", date(2026, 8, 15))
+        # August's own natural occurrence: no event for (p1, 2026-08), so
+        # apply_payment_events() resolves it as an ordinary pending item.
+        august_natural = pe.apply_payment_events([TEMPLATE], events, "2026-08")
+        unpaid_carryover, _ = pe.resolve_deferred_carryovers(self.PAYMENTS, events, "2026-08", date(2026, 8, 20))
+        self.assertEqual(payment_state(august_natural[0]), PENDING)
+        self.assertEqual(len(unpaid_carryover), 1)
+        self.assertEqual(unpaid_carryover[0]["origin_cycle_key"], "2026-07")
+
+    def test_paid_deferred_item_excluded_entirely(self):
+        # Marking the carried-over event paid_me (same payment_id, same
+        # origin cycle_key it was deferred under) must remove it from
+        # both unpaid and deferred going forward.
+        events = pe.defer_payment_to_date([], "p1", "2026-07", date(2026, 8, 15))
+        events = pe.set_payment_event(events, "p1", "2026-07", PAID_ME)
+        unpaid, deferred = pe.resolve_deferred_carryovers(self.PAYMENTS, events, "2026-08", date(2026, 8, 20))
+        self.assertEqual(unpaid, [])
+        self.assertEqual(deferred, [])
+
+    def test_unknown_payment_id_skipped_gracefully(self):
+        events = pe.defer_payment_to_date([], "ghost", "2026-07", date(2026, 8, 15))
+        unpaid, deferred = pe.resolve_deferred_carryovers(self.PAYMENTS, events, "2026-08", date(2026, 8, 20))
+        self.assertEqual(unpaid, [])
+        self.assertEqual(deferred, [])
+
+    def test_missing_deferred_to_skipped_gracefully(self):
+        malformed = [{"payment_id": "p1", "cycle_key": "2026-07", "state": DEFERRED}]
+        unpaid, deferred = pe.resolve_deferred_carryovers(self.PAYMENTS, malformed, "2026-07", date(2026, 7, 20))
+        self.assertEqual(unpaid, [])
+        self.assertEqual(deferred, [])
+
+    def test_non_deferred_events_ignored(self):
+        events = pe.set_payment_event([], "p1", "2026-07", PAID_ME)
+        unpaid, deferred = pe.resolve_deferred_carryovers(self.PAYMENTS, events, "2026-07", date(2026, 7, 20))
+        self.assertEqual(unpaid, [])
+        self.assertEqual(deferred, [])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -481,6 +481,13 @@ details.safety-review-group[open] summary.safety-review-group-title::before{cont
 .envelope-card-actions{display:flex;gap:8px;margin-top:10px}
 .envelope-card-btn{flex:1;text-align:center;padding:9px 10px;border-radius:12px;background:#0f766e;color:white;text-decoration:none;font-size:13px;font-weight:750;border:0;cursor:pointer}
 .envelope-card-btn.secondary{background:rgba(148,163,184,.18);color:#e2e8f0}
+.defer-widget{display:inline-block}
+.defer-form{margin-top:8px;padding:10px 12px;border:1px solid rgba(245,158,11,.4);background:rgba(120,53,15,.16);border-radius:12px;min-width:220px}
+.defer-form label{display:block;color:var(--muted);font-size:12px;margin-bottom:5px}
+.defer-form .defer-date-input{width:100%;padding:9px 10px;border-radius:10px;margin-bottom:8px}
+.defer-quick-row{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
+button.tiny.defer-quick{padding:6px 9px;font-size:11px;border-radius:999px;background:rgba(148,163,184,.2);color:#e2e8f0;border:0;cursor:pointer}
+.defer-form .btn-row{margin-top:0}
 .envelope-edit-row{
   display:grid;
   grid-template-columns:1fr 1fr;
@@ -611,6 +618,42 @@ details.safety-review-group[open] summary.safety-review-group-title::before{cont
 </style>
 </head>
 <body>
+{% macro paid_button(payment_id, cycle_key) %}
+<form method="post" action="/payment/state/by-id" class="paid-quick-form">
+<input type="hidden" name="payment_id" value="{{payment_id}}">
+<input type="hidden" name="cycle_key" value="{{cycle_key}}">
+<input type="hidden" name="state" value="paid_me">
+<button class="secondary">✓ Zaplatené</button>
+</form>
+{% endmacro %}
+{% macro state_form(payment_id, cycle_key, states, labels) %}
+<form method="post" action="/payment/state/by-id">
+<input type="hidden" name="payment_id" value="{{payment_id}}">
+<input type="hidden" name="cycle_key" value="{{cycle_key}}">
+<select name="state">{% for s in states %}<option value="{{s}}">{{labels.get(s,s)}}</option>{% endfor %}</select>
+<button class="secondary">Nastaviť</button>
+</form>
+{% endmacro %}
+{% macro defer_widget(payment_id, cycle_key, btn_label) %}
+<div class="defer-widget">
+<button type="button" class="secondary defer-toggle">{{btn_label}}</button>
+<form method="post" action="/payment/defer/by-id" class="defer-form" hidden>
+<input type="hidden" name="payment_id" value="{{payment_id}}">
+<input type="hidden" name="cycle_key" value="{{cycle_key}}">
+<label>Odložiť do dátumu</label>
+<input type="date" name="deferred_to" class="defer-date-input" required>
+<div class="defer-quick-row">
+<button type="button" class="tiny defer-quick" data-quick="7d">+7 dní</button>
+<button type="button" class="tiny defer-quick" data-quick="next_month">ďalší mesiac</button>
+<button type="button" class="tiny defer-quick" data-quick="end_month">koniec mesiaca</button>
+</div>
+<div class="btn-row">
+<button type="submit" class="secondary">Potvrdiť odklad</button>
+<button type="button" class="secondary defer-cancel">Zrušiť</button>
+</div>
+</form>
+</div>
+{% endmacro %}
 <nav class="topnav" id="appDrawer">
 <span class="brand">BudgetPilot</span>
 <a href="#overview">Prehľad</a>
@@ -834,15 +877,14 @@ details.safety-review-group[open] summary.safety-review-group-title::before{cont
 <div class="table-scroll">
 <table><tr><th>Názov</th><th>Suma</th><th>Termín</th><th>Priorita</th><th>Naliehavosť</th><th></th></tr>
 {% for p in unpaid %}
-<tr>
-<td>{{p.name}}</td><td>{{p.amount}} €</td><td>{{p.due_date}}</td><td>{{p.get('priority','-')}}</td>
+<tr data-payment-id="{{p.get('id','')}}" data-cycle-key="{{p.get('origin_cycle_key', cycle_key)}}">
+<td>{{p.name}}{% if p.get('carryover_label') %}<br><span class="small">{{p.carryover_label}}</span>{% endif %}</td>
+<td>{{p.amount}} €</td><td>{{p.due_date}}</td><td>{{p.get('priority','-')}}</td>
 <td class="urgency-{{p.urgency}}">{{urgency_label_sk.get(p.urgency, p.urgency)}}</td>
 <td class="actions-stack">
-<form method="post" action="/payment/state/{{p._index}}">
-<select name="state">{% for s in selectable_states %}<option value="{{s}}">{{state_label.get(s,s)}}</option>{% endfor %}</select>
-<button class="secondary">Nastaviť</button>
-</form>
-<form method="post" action="/payment/defer/{{p._index}}"><button class="secondary">Odložiť o 7 dní</button></form>
+{{ paid_button(p.get('id',''), p.get('origin_cycle_key', cycle_key)) }}
+{{ defer_widget(p.get('id',''), p.get('origin_cycle_key', cycle_key), '↷ Odložiť') }}
+{{ state_form(p.get('id',''), p.get('origin_cycle_key', cycle_key), selectable_states, state_label) }}
 </td></tr>
 {% endfor %}
 </table>
@@ -856,14 +898,13 @@ details.safety-review-group[open] summary.safety-review-group-title::before{cont
 <div class="table-scroll">
 <table><tr><th>Názov</th><th>Suma</th><th>Odložené do</th><th></th></tr>
 {% for p in deferred %}
-<tr>
-<td>{{p.name}}</td><td>{{p.amount}} €</td><td>{{p.get('deferred_to','-')}}</td>
+<tr data-payment-id="{{p.get('id','')}}" data-cycle-key="{{p.get('origin_cycle_key', cycle_key)}}">
+<td>{{p.name}}</td><td>{{p.amount}} €</td>
+<td><span class="badge warn">Odložené do {{p.get('deferred_to','-')}}</span></td>
 <td class="actions-stack">
-<form method="post" action="/payment/state/{{p._index}}">
-<select name="state">{% for s in selectable_states %}<option value="{{s}}">{{state_label.get(s,s)}}</option>{% endfor %}</select>
-<button class="secondary">Nastaviť</button>
-</form>
-<form method="post" action="/payment/defer/{{p._index}}"><button class="secondary">Odložiť o 7 dní</button></form>
+{{ paid_button(p.get('id',''), p.get('origin_cycle_key', cycle_key)) }}
+{{ defer_widget(p.get('id',''), p.get('origin_cycle_key', cycle_key), 'Zmeniť dátum') }}
+{{ state_form(p.get('id',''), p.get('origin_cycle_key', cycle_key), selectable_states, state_label) }}
 </td></tr>
 {% endfor %}
 </table>
@@ -925,7 +966,7 @@ details.safety-review-group[open] summary.safety-review-group-title::before{cont
 </select>
 <button class="secondary">Nastaviť</button>
 </form>
-<form method="post" action="/payment/defer/{{loop.index0}}"><button class="secondary">Odložiť o 7 dní</button></form>
+{{ defer_widget(x.get('id',''), cycle_key, '↷ Odložiť') }}
 <form method="get" action="/edit/payment/{{loop.index0}}"><button class="secondary">Upraviť</button></form>
 <form method="post" action="/payment/delete/{{loop.index0}}"><button class="danger">Zmazať</button></form>
 </td></tr>
@@ -1199,7 +1240,7 @@ details.safety-review-group[open] summary.safety-review-group-title::before{cont
       '<div class="safety-review-x" title="Nezaplatené">✕</div>' +
       '<div class="safety-review-due"></div>' +
       '<div class="safety-review-actions"></div>';
-    r.querySelector(".safety-review-name").textContent = item.name;
+    r.querySelector(".safety-review-name").textContent = item.name + (item.note ? " — " + item.note : "");
     r.querySelector(".safety-review-sum").textContent = item.sum;
     r.querySelector(".safety-review-due").textContent = item.dueText || "";
     if(item.badge){
@@ -1209,16 +1250,10 @@ details.safety-review-group[open] summary.safety-review-group-title::before{cont
       r.querySelector(".safety-review-x").replaceWith(b);
     }
     if(item.payForm){
-      const f = item.payForm.cloneNode(true);
-      const b = f.querySelector("button");
-      if(b) b.textContent = "✓ Zaplatené";
-      r.querySelector(".safety-review-actions").appendChild(f);
+      r.querySelector(".safety-review-actions").appendChild(item.payForm.cloneNode(true));
     }
-    if(item.deferForm){
-      const f = item.deferForm.cloneNode(true);
-      const b = f.querySelector("button");
-      if(b) b.textContent = "↷ Odložiť";
-      r.querySelector(".safety-review-actions").appendChild(f);
+    if(item.deferWidget){
+      r.querySelector(".safety-review-actions").appendChild(item.deferWidget.cloneNode(true));
     }
     return r;
   }
@@ -1249,26 +1284,38 @@ details.safety-review-group[open] summary.safety-review-group-title::before{cont
     const now = todayIso();
     const overdue = [], soon = [], pending = [];
 
+    function scrapeActions(row){
+      return {
+        payForm: row.querySelector(".paid-quick-form"),
+        deferWidget: row.querySelector(".defer-widget"),
+      };
+    }
+
+    function nameAndNote(cell){
+      const noteEl = cell.querySelector(".small");
+      const note = noteEl ? noteEl.textContent.trim() : "";
+      const clone = cell.cloneNode(true);
+      const noteClone = clone.querySelector(".small");
+      if(noteClone) noteClone.remove();
+      return {name: clone.textContent.trim(), note: note};
+    }
+
     Array.from(unpaidSection.querySelectorAll("tbody tr")).forEach(function(row){
       const cells = Array.from(row.querySelectorAll("td"));
       if(cells.length < 3) return;
-      const name = (cells[0].innerText || cells[0].textContent || "").trim();
+      const parsed = nameAndNote(cells[0]);
+      const name = parsed.name, note = parsed.note;
       const sum = (cells[1].innerText || cells[1].textContent || "").trim();
       const due = (cells[2].innerText || cells[2].textContent || "").trim();
       if(!name || !sum) return;
 
-      const payForm = Array.from(row.querySelectorAll("form")).find(function(f){
-        return !!f.querySelector('input[name="state"][value="paid_me"]');
-      });
-      const deferForm = Array.from(row.querySelectorAll("form")).find(function(f){
-        return (f.getAttribute("action") || "").indexOf("/payment/defer/") !== -1;
-      });
+      const actions = scrapeActions(row);
 
       const isOverdue = due && due < now;
       const daysUntil = due ? Math.round((new Date(due) - new Date(now)) / 86400000) : null;
       const isSoon = !isOverdue && daysUntil !== null && daysUntil >= 0 && daysUntil <= 3;
       const dueText = due ? (isOverdue ? "Po splatnosti: " + due : "Termín: " + due) : "Termín nezadaný";
-      const item = {name:name, sum:sum, dueText:dueText, payForm:payForm, deferForm:deferForm, due:due};
+      const item = {name:name, note:note, sum:sum, dueText:dueText, payForm:actions.payForm, deferWidget:actions.deferWidget, due:due};
 
       if(isOverdue) overdue.push(item);
       else if(isSoon) soon.push(item);
@@ -1288,7 +1335,11 @@ details.safety-review-group[open] summary.safety-review-group-title::before{cont
         const sum = (cells[1].innerText || cells[1].textContent || "").trim();
         const to = (cells[2].innerText || cells[2].textContent || "").trim();
         if(!name || !sum) return;
-        deferred.push({name:name, sum:sum, dueText: to ? "Odložené do: " + to : "", badge:"Odložené", badgeClass:"warn"});
+        const actions = scrapeActions(row);
+        deferred.push({
+          name:name, sum:sum, dueText: "", badge: to || "Odložené", badgeClass:"warn",
+          payForm: actions.payForm, deferWidget: actions.deferWidget,
+        });
       });
     }
 
@@ -1629,17 +1680,11 @@ details.safety-review-group[open] summary.safety-review-group-title::before{cont
     });
   }
 
-  ready(function(){
-    patchTopRows();
-
-    // Other UI patches create the top review asynchronously, so retry briefly.
-    let tries = 0;
-    const timer = setInterval(function(){
-      patchTopRows();
-      tries += 1;
-      if(tries > 20) clearInterval(timer);
-    }, 250);
-  });
+  // patchTopRows() is no longer called: BP_UX_SAFETY_V2's addUnpaidReview()
+  // now builds the .safety-review-row actions (paid button + defer widget)
+  // directly, correctly, including for carried-over deferred items. Calling
+  // patchTopRows() here too would append a second, stale defer action onto
+  // rows it already owns.
 })();
 </script>
 
@@ -1760,6 +1805,61 @@ details.safety-review-group[open] summary.safety-review-group-title::before{cont
 })();
 </script>
 
+<script>
+/* BP_DEFER_DATE_REQUIRED_V1: require a target date for every "Odložiť"
+   action instead of a silent one-click +7-days. Event-delegated on
+   document so it also covers .defer-widget instances that other
+   patches (BP_UX_SAFETY_V2) clone into the payment-review card. */
+(function(){
+  function pad(n){ return String(n).padStart(2, "0"); }
+  function iso(d){ return d.getFullYear() + "-" + pad(d.getMonth()+1) + "-" + pad(d.getDate()); }
+  function endOfMonth(d){ return new Date(d.getFullYear(), d.getMonth()+1, 0); }
+
+  document.addEventListener("click", function(e){
+    const toggle = e.target.closest(".defer-toggle");
+    if(toggle){
+      const form = toggle.parentElement.querySelector(".defer-form");
+      if(form) form.hidden = !form.hidden;
+      return;
+    }
+    const cancel = e.target.closest(".defer-cancel");
+    if(cancel){
+      const form = cancel.closest(".defer-form");
+      if(form) form.hidden = true;
+      return;
+    }
+    const quick = e.target.closest(".defer-quick");
+    if(quick){
+      const form = quick.closest(".defer-form");
+      const input = form ? form.querySelector(".defer-date-input") : null;
+      if(!input) return;
+      const today = new Date();
+      let target = null;
+      if(quick.dataset.quick === "7d"){
+        target = new Date(today);
+        target.setDate(target.getDate() + 7);
+      } else if(quick.dataset.quick === "next_month"){
+        target = new Date(today.getFullYear(), today.getMonth() + 1, today.getDate());
+      } else if(quick.dataset.quick === "end_month"){
+        target = endOfMonth(today);
+      }
+      if(target) input.value = iso(target);
+      return;
+    }
+  });
+
+  document.addEventListener("submit", function(e){
+    const form = e.target.closest(".defer-form");
+    if(!form) return;
+    const input = form.querySelector(".defer-date-input");
+    if(!input || !input.value){
+      e.preventDefault();
+      if(input) input.reportValidity();
+    }
+  });
+})();
+</script>
+
 </body>
 </html>
 """
@@ -1832,7 +1932,30 @@ def render_page(edit_income=None, edit_payment=None, edit_expense=None):
         p for p in payments_resolved
         if ob.is_recurring_active(payments[p["_index"]], today.year, today.month)
     ]
-    groups = pe.group_payments_by_status(active_resolved, today)
+    # Deferred items are resolved separately below (resolve_deferred_carryovers),
+    # since the naive per-cycle state here can't tell whether a deferred_to
+    # date has actually arrived — exclude them here so they aren't double
+    # counted between the two paths.
+    groups = pe.group_payments_by_status(
+        [p for p in active_resolved if p.get("state") != DEFERRED], today
+    )
+
+    # A deferred payment must never silently disappear once its target date
+    # arrives — it re-promotes itself into this cycle's unpaid list instead
+    # of staying bucketed as "deferred" (docs/balance_first_rules.md rules
+    # 2-4). This is independent of, and additional to, that same payment's
+    # own natural occurrence this cycle (rule 5: a recurring payment
+    # carried over from an earlier month does not merge with or hide this
+    # month's own fresh obligation).
+    all_events = pe.load_payment_events()
+    unpaid_carryovers, still_deferred = pe.resolve_deferred_carryovers(
+        payments, all_events, cycle_key, today
+    )
+    groups["unpaid"] = sorted(
+        groups["unpaid"] + unpaid_carryovers,
+        key=lambda p: (pe.URGENCY_ORDER.get(p["urgency"], 9), p.get("due_date") or date.max),
+    )
+    groups["deferred"] = still_deferred
 
     debts = load(DEBTS, [])
 
@@ -2032,6 +2155,57 @@ def payment_defer(i):
         events = pe.defer_payment_event(events, data[i]["id"], cycle_key, today)
         pe.save_payment_events(events)
         log_audit("payment_deferred", f"{data[i].get('name')} {data[i].get('amount')} €")
+    return go_home()
+
+@app.post("/payment/state/by-id")
+def payment_set_state_by_id():
+    """Identity-based counterpart to /payment/state/<i>: targets an
+    explicit (payment_id, cycle_key) pair instead of an array index, so
+    it also works for carried-over deferred items (see
+    payment_events.resolve_deferred_carryovers), which live under their
+    own origin cycle_key rather than the page's current one."""
+    payment_id = request.form.get("payment_id", "").strip()
+    cycle_key = request.form.get("cycle_key", "").strip()
+    new_state = request.form.get("state", PENDING)
+    if payment_id and cycle_key and new_state in SELECTABLE_STATES:
+        events = pe.load_payment_events()
+        events = pe.set_payment_event(events, payment_id, cycle_key, new_state)
+        pe.save_payment_events(events)
+        if new_state == PAID_ME:
+            data = load(PAYMENTS, [])
+            template = next((p for p in data if p.get("id") == payment_id), None)
+            label = template.get("name") if template else payment_id
+            log_audit("payment_paid", f"{label}")
+    return go_home()
+
+@app.post("/payment/defer/by-id")
+def payment_defer_by_id():
+    """Requires an explicit deferred_to date — replaces the old
+    one-click +7-days /payment/defer/<i> for all UI defer actions (see
+    docs/balance_first_rules.md: a deferred payment must always carry a
+    concrete target date, never disappear on a silent auto-schedule).
+    Empty or invalid dates are rejected (no-op), matching the "empty
+    defer date must not save" / "invalid dates rejected" rules — past
+    dates ARE accepted, since resolve_deferred_carryovers() will then
+    correctly show the item as overdue-unpaid rather than hiding it.
+    """
+    payment_id = request.form.get("payment_id", "").strip()
+    cycle_key = request.form.get("cycle_key", "").strip()
+    deferred_to_raw = request.form.get("deferred_to", "").strip()
+    note = request.form.get("note", "").strip()
+    if not (payment_id and cycle_key and deferred_to_raw):
+        return go_home()
+    try:
+        deferred_to = date.fromisoformat(deferred_to_raw)
+    except ValueError:
+        return go_home()
+    events = pe.load_payment_events()
+    events = pe.defer_payment_to_date(events, payment_id, cycle_key, deferred_to, note=note or None)
+    pe.save_payment_events(events)
+    data = load(PAYMENTS, [])
+    template = next((p for p in data if p.get("id") == payment_id), None)
+    label = template.get("name") if template else payment_id
+    log_audit("payment_deferred", f"{label} -> {deferred_to.isoformat()}")
     return go_home()
 
 @app.post("/payment/delete/<int:i>")

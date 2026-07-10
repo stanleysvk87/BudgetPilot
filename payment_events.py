@@ -118,10 +118,13 @@ def set_payment_event(events, payment_id, cycle_key, state, deferred_to=None, no
     `deferred_to`/`note` fall back to whatever the previous event for this
     same cycle had, so re-selecting a state from the dropdown doesn't
     silently wipe a deferred date or note that a different action set.
+    `created_at` is preserved from the existing event (first-seen time),
+    `updated_at` always reflects this call.
     """
     if state not in VALID_STATES:
         raise ValueError(f"unknown payment state: {state!r}")
 
+    now = now or datetime.now()
     existing = get_payment_event(events, payment_id, cycle_key)
     remaining = [e for e in events if e is not existing]
 
@@ -129,7 +132,8 @@ def set_payment_event(events, payment_id, cycle_key, state, deferred_to=None, no
         "payment_id": payment_id,
         "cycle_key": cycle_key,
         "state": state,
-        "updated_at": (now or datetime.now()).isoformat(timespec="seconds"),
+        "created_at": (existing.get("created_at") if existing else None) or now.isoformat(timespec="seconds"),
+        "updated_at": now.isoformat(timespec="seconds"),
     }
     resolved_deferred = deferred_to if deferred_to is not None else (existing.get("deferred_to") if existing else None)
     if state == DEFERRED and resolved_deferred:
@@ -142,18 +146,105 @@ def set_payment_event(events, payment_id, cycle_key, state, deferred_to=None, no
     return remaining
 
 
+def defer_payment_to_date(events, payment_id, cycle_key, deferred_to, note=None, now=None):
+    """Defer a payment to an explicit, required target date.
+
+    `cycle_key` identifies which event slot to write: the current cycle
+    for a fresh defer action, or the payment's existing `origin_cycle_key`
+    (see resolve_deferred_carryovers) when re-deferring/changing the date
+    of an already-deferred item — reusing that same slot rather than
+    creating a second, orphaned deferred event for the same payment.
+
+    `deferred_to` must be a date object; the caller is responsible for
+    parsing/validating user input before calling this (see
+    budgetpilot_web.payment_event_defer() for the required-field /
+    invalid-date rejection this function itself does not perform).
+    """
+    return set_payment_event(
+        events, payment_id, cycle_key, DEFERRED,
+        deferred_to=deferred_to.isoformat(), note=note, now=now,
+    )
+
+
 def defer_payment_event(events, payment_id, cycle_key, today, days=7):
-    """Defer within the current cycle only, stacking on any existing
-    deferred_to already set for this cycle (mirrors the stacking behavior
-    of obligations.defer_payment, scoped per-cycle instead of on the
-    template). Does not support scheduling a deferral into a future
-    cycle yet — see docs/monthly_cycle.md for the known limitation.
+    """Legacy one-click +7-days defer. Superseded in the web UI by
+    defer_payment_to_date() (deferring now always requires an explicit
+    date — see docs/balance_first_rules.md), kept here because it's
+    still a valid pure building block and still covered by tests.
     """
     existing = get_payment_event(events, payment_id, cycle_key)
     base = existing.get("deferred_to") if existing else None
     base_date = date.fromisoformat(base) if base else today
     new_target = base_date + timedelta(days=days)
     return set_payment_event(events, payment_id, cycle_key, DEFERRED, deferred_to=new_target.isoformat())
+
+
+def resolve_deferred_carryovers(payments, events, cycle_key, today):
+    """Deferred-state events from ANY cycle, split into:
+
+    - unpaid_carryovers: deferred_to now falls in `cycle_key`'s month or
+      earlier — must show as an active unpaid item THIS cycle (rules 2/3
+      in docs/balance_first_rules.md), never silently staying hidden as
+      "deferred" once its date arrives or passes.
+    - still_deferred: deferred_to is still in a later month — stays in
+      the deferred bucket, not counted as unpaid yet.
+
+    Each item is shaped like a resolved payment (dict copy of the
+    matching entry in `payments`, plus 'due_date'/'state'/'urgency') so
+    it can be merged into the same unpaid/deferred lists
+    group_payments_by_status() produces, with two extra fields:
+    'origin_cycle_key' (the cycle_key the deferred event actually lives
+    under — the identity a re-defer/mark-paid action must target) and,
+    for promoted items, 'carryover_label'.
+
+    Deliberately independent of a payment's *current*-cycle event: if
+    the same recurring payment also has its own fresh event for
+    `cycle_key` (or no event at all, i.e. its own natural pending
+    occurrence), that is resolved separately by apply_payment_events()/
+    group_payments_by_status() — a carryover is always an *additional*
+    item, never merged into or replacing the current month's own
+    obligation (rule 5).
+    """
+    payments_by_id = {p.get("id"): p for p in payments if p.get("id")}
+    unpaid_carryovers, still_deferred = [], []
+
+    for event in events:
+        if event.get("state") != DEFERRED:
+            continue
+        deferred_to_raw = event.get("deferred_to")
+        if not deferred_to_raw:
+            continue
+        try:
+            deferred_to = date.fromisoformat(deferred_to_raw)
+        except (TypeError, ValueError):
+            continue
+
+        payment_id = event.get("payment_id")
+        template = payments_by_id.get(payment_id)
+        if template is None:
+            continue
+
+        origin_cycle_key = event.get("cycle_key")
+        target_cycle_key = cycle_key_for_date(deferred_to)
+
+        item = dict(template)
+        item["due_date"] = deferred_to
+        item["deferred_to"] = deferred_to_raw
+        item["origin_cycle_key"] = origin_cycle_key
+
+        if target_cycle_key <= cycle_key:
+            item["state"] = PENDING
+            item["urgency"] = urgency_label(deferred_to, today)
+            item["carryover_label"] = (
+                "Odložené z minulého obdobia" if origin_cycle_key == cycle_key
+                else f"Odložené z {origin_cycle_key}"
+            )
+            unpaid_carryovers.append(item)
+        else:
+            item["state"] = DEFERRED
+            still_deferred.append(item)
+
+    return unpaid_carryovers, still_deferred
 
 
 def urgency_label(due_date, today):

@@ -15,12 +15,13 @@ on this device (`BP_APP_SHELL_PATCH_V1`, `BP_UX_SAFETY_V2`,
 - **BP_BALANCE_FIRST_V1**: wires the balance-first summary into the page.
 - **BP_EDITABLE_ENVELOPES_V1**: inline envelope amount editing via
   `envelope_editor.py`'s `/api/envelopes/update`.
-- **BP_TOP_REVIEW_DEFER_V1**: replaces the dropdown-only payment state
-  workflow with tap-friendly "Z účtu / Iný / Rezerva / Nezaplatené" +
-  "Odložiť" buttons — these clone/reuse the *same* underlying
-  `<form action="/payment/state/<i>">` / `<form action="/payment/defer/<i>">`
-  elements the server renders, so every code path (old dropdown or new
-  buttons) posts to the same two backend routes.
+- **BP_TOP_REVIEW_DEFER_V1**: its row-patching (`patchTopRows()`) is now
+  a no-op — `BP_UX_SAFETY_V2`'s `addUnpaidReview()` builds the
+  `.safety-review-row` paid/defer actions directly and correctly
+  (including for carried-over deferred items, which don't have a
+  meaningful array index for `patchTopRows()`'s original clone-from-table
+  approach to target), so leaving the old patcher active would have
+  appended a second, stale defer action onto rows it no longer owns.
 - **BP_TOP_REAL_OVERVIEW_V5**: the top "real balance" panel, fetching
   `GET /api/balance-first-summary` and rendering it client-side; hides
   the old `.topgrid`/`.summarygrid`/`.envelope-summary`/`.fin-overview`
@@ -28,6 +29,13 @@ on this device (`BP_APP_SHELL_PATCH_V1`, `BP_UX_SAFETY_V2`,
   they still render server-side, just get a `bp-hide-old-metrics` class.
 - **BP_OCR_CANDIDATES_V1**: `.candidate-list`/`.candidate` styling for
   the OCR amount-candidate picker in the receipt review card.
+- **BP_DEFER_DATE_REQUIRED_V1**: the `.defer-widget` toggle/quick-date/
+  cancel/required-date-on-submit behavior, event-delegated on
+  `document` (not queried at page-load) specifically so cloned copies
+  of the widget — `BP_UX_SAFETY_V2` clones the whole `.defer-widget`
+  div into each `.safety-review-row` — work without any per-clone
+  rewiring. See docs/balance_first_rules.md's "Deferred payments"
+  section for the data-model side of this.
 
 ## Color rules
 
@@ -91,3 +99,19 @@ free-text field (stored as `expense.merchant` when present — feeds the
 same envelope alias matching OCR expenses use), and date defaulting to
 today. The plain "Rýchly výdavok" form stays a single-amount shortcut
 for the common case and does not expose category/merchant.
+
+## Deferring a payment ("Odložiť")
+
+No more one-click auto-+7-days. Clicking "↷ Odložiť" (or "Zmeniť dátum"
+on an already-deferred item) expands an inline `.defer-form` in place —
+never a page navigation or a separate modal — with a required
+`type="date"` input, three quick-fill buttons (+7 dní / ďalší mesiac /
+koniec mesiaca, computed client-side and just fill the date field, still
+requiring the explicit "Potvrdiť odklad" submit), and a "Zrušiť" button
+that collapses the form again without submitting. Submitting with an
+empty date is blocked client-side (`reportValidity()`) as a first line
+of defense; the server route (`/payment/defer/by-id`) independently
+rejects a missing or unparseable date too, so this holds even with
+JavaScript disabled or a hand-crafted request. See
+docs/balance_first_rules.md for what happens to the event once
+submitted.

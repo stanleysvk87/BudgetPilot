@@ -159,6 +159,70 @@ def _is_mandatory(p: dict) -> bool:
     return priority in {"mandatory", "important"} or flexibility == "hard_due"
 
 
+def _target_cycle(deferred_to: str) -> str:
+    return str(deferred_to)[:7]
+
+
+def _deferred_carryovers(payments: list, events: list, cycle: str) -> tuple:
+    """Deferred-state events from ANY cycle, split by whether their
+    deferred_to date now falls in `cycle`'s month or earlier (must show
+    as an active unpaid item THIS cycle — never silently stay hidden as
+    "deferred" once the date arrives/passes) or a still-future month
+    (stays deferred). A carryover is always an item *in addition to*
+    that same payment's own natural occurrence this cycle, never a
+    replacement for it — see docs/balance_first_rules.md.
+    """
+    payments_by_id = {_payment_id(p): p for p in payments if isinstance(p, dict) and _payment_id(p)}
+    unpaid_carryovers, deferred_carryovers = [], []
+
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        if _event_state(event) != DEFERRED_STATE:
+            continue
+        deferred_to = str(event.get("deferred_to") or "").strip()
+        if len(deferred_to) < 7 or deferred_to[4] != "-":
+            continue
+
+        pid = _payment_id(event)
+        template = payments_by_id.get(pid)
+        if template is None:
+            continue
+
+        origin_cycle = _event_cycle(event) or cycle
+        target_cycle = _target_cycle(deferred_to)
+        amount = _num(template.get("amount"), 0)
+        if amount <= 0:
+            continue
+        mandatory = _is_mandatory(template)
+        name = str(template.get("name") or "Platba")
+        if target_cycle <= cycle:
+            name = name + (
+                " — odložené z minulého obdobia" if origin_cycle == cycle
+                else f" — odložené z {origin_cycle}"
+            )
+            unpaid_carryovers.append({
+                "id": pid,
+                "name": name,
+                "amount": round(amount, 2),
+                "due_date": deferred_to,
+                "mandatory": mandatory,
+                "overdue": deferred_to < date.today().isoformat(),
+                "origin_cycle_key": origin_cycle,
+            })
+        else:
+            deferred_carryovers.append({
+                "id": pid,
+                "name": name,
+                "amount": round(amount, 2),
+                "deferred_to": deferred_to,
+                "mandatory": mandatory,
+                "origin_cycle_key": origin_cycle,
+            })
+
+    return unpaid_carryovers, deferred_carryovers
+
+
 def _due_date_for_current_month(p: dict) -> str:
     t = date.today()
     try:
@@ -224,14 +288,10 @@ def build_balance_first_summary() -> dict:
             continue
 
         if state == DEFERRED_STATE:
-            deferred_total += amount
-            deferred_items.append({
-                "id": pid,
-                "name": str(p.get("name") or "Platba"),
-                "amount": round(amount, 2),
-                "deferred_to": event.get("deferred_to") if isinstance(event, dict) else "",
-                "mandatory": mandatory,
-            })
+            # Handled below by _deferred_carryovers(), which — unlike this
+            # per-cycle-only lookup — knows whether the deferred_to date
+            # has actually arrived and promotes it to unpaid when it has,
+            # instead of leaving it parked under "deferred" forever.
             continue
 
         overdue = due_date < today
@@ -253,6 +313,20 @@ def build_balance_first_summary() -> dict:
             "mandatory": mandatory,
             "overdue": overdue,
         })
+
+    unpaid_carryovers, deferred_carryovers = _deferred_carryovers(payments, events, cycle)
+    for item in unpaid_carryovers:
+        unpaid_total += item["amount"]
+        if item["mandatory"]:
+            mandatory_total += item["amount"]
+        else:
+            optional_total += item["amount"]
+        if item["overdue"]:
+            overdue_count += 1
+        unpaid_items.append(item)
+    for item in deferred_carryovers:
+        deferred_total += item["amount"]
+        deferred_items.append(item)
 
     envelope_budget_total = 0.0
     envelope_spent_total = 0.0
