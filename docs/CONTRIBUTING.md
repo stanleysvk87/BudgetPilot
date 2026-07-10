@@ -41,6 +41,10 @@ python3 budgetpilot.py
 Both should succeed without errors, and the test count shouldn't silently
 shrink.
 
+If you are preparing a public push or release, also run through
+[RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md). In particular, never commit
+live `data/*.json`, receipt photos, or `backups/`.
+
 ## Where things live
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for a map of the codebase.

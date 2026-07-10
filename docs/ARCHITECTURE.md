@@ -65,3 +65,5 @@ introduced by this documentation pass.
 `rollback_latest.sh` scripts are earlier, ad-hoc iterations of this project
 kept for history. They are not part of the supported CLI/web-UI
 architecture described above and aren't required to run BudgetPilot today.
+Some of them write directly to `~/BudgetPilot`, so treat them as historical
+reference only, not release tooling.

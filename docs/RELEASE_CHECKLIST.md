@@ -1,0 +1,99 @@
+# Release Checklist
+
+Use this before pushing BudgetPilot to a public remote or making a release.
+
+## Must Pass
+
+```bash
+git status --short
+python3 -m unittest discover -s tests
+python3 -m py_compile budgetpilot.py budgetpilot_web.py first_run_wizard.py
+```
+
+- `git status --short` should be clean, except for changes you intend to
+  commit.
+- Tests should pass without skipped demo-data assumptions.
+- Runtime data should not be staged or committed.
+
+## Data Privacy
+
+Confirm live household data is ignored:
+
+```bash
+git status --ignored --short data backups
+git ls-files data backups
+```
+
+Expected:
+
+- `data/*.json`, `data/receipts/`, and `backups/` appear as ignored local
+  files if they exist.
+- `git ls-files data backups` should show only `data/.gitkeep` for `data/`
+  and nothing from `backups/`.
+- Demo data belongs in `data.example/` and `tests/fixtures/demo_data/`.
+
+Do not publish screenshots, terminal output, logs, or docs containing real:
+
+- account balances, bills, debts, receipts, merchants, names, addresses
+- LAN IPs that identify your home setup
+- absolute local paths from your machine
+- backup directory contents
+
+## Secret Scan
+
+Run a quick text scan before publishing:
+
+```bash
+rg -n -i "password|passwd|secret|token|api[_-]?key|bearer|authorization|/home/|192\\.168\\.|10\\.0\\." \
+  --glob '!data/**' --glob '!backups/**' --glob '!.venv/**' .
+```
+
+Review every hit. Test fixtures and documentation examples are fine; real
+credentials or personal runtime values are not.
+
+## Public Docs
+
+Check these files after any behavior change:
+
+- [README.md](../README.md) — quick explanation and startup path
+- [docs/QUICKSTART.md](QUICKSTART.md) — first two minutes
+- [docs/INSTALL.md](INSTALL.md) — setup and troubleshooting
+- [docs/SECURITY.md](SECURITY.md) — LAN-only/no-auth warning
+- [docs/PRIVACY.md](PRIVACY.md) — local data and gitignore behavior
+- [docs/DATA_MODEL.md](DATA_MODEL.md) — JSON shape
+- [docs/ROADMAP.md](ROADMAP.md) — current status, not wishful thinking
+
+## Demo Screenshots
+
+Only capture screenshots after loading fake data:
+
+```bash
+python3 scripts/load_demo_data.py
+python3 budgetpilot_web.py
+```
+
+Then inspect every screenshot before committing it. It must show fake
+numbers from `data.example/`, never live household data.
+
+## Legacy Files
+
+Before a public release, decide whether to keep or remove historical files:
+
+- `budgetpilot_gui*.py`
+- `add_gui_lists.py`
+- `fix_*.py`
+- `rollback_latest.sh`
+
+They are useful project history, but they are not part of the supported web
+UI/CLI path and some write directly to `~/BudgetPilot`. If kept, they should
+remain clearly documented as historical/unsupported.
+
+## Security Position
+
+BudgetPilot currently has no login, CSRF protection, or public-internet
+hardening. Public release notes should say plainly:
+
+- run it only on a trusted LAN or behind a VPN
+- do not port-forward it
+- do not expose it through a public tunnel
+- remote access should use WireGuard/Tailscale or equivalent private VPN

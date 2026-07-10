@@ -151,6 +151,8 @@ fix_*.py, rollback_latest.sh   One-off historical patch scripts, kept for histor
 - [docs/PRIVACY.md](docs/PRIVACY.md) — what data BudgetPilot keeps and where
 - [docs/SECURITY.md](docs/SECURITY.md) — LAN-only assumptions, no auth yet
 - [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) — how to contribute safely
+- [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md) — checks before
+  pushing/publishing
 - [CHANGELOG.md](CHANGELOG.md) — human-readable history of major changes
 
 Deeper technical notes on the current rule set already exist in
