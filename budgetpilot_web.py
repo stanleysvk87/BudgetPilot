@@ -864,13 +864,13 @@ window.BP_EDIT_TARGET = "{% if edit_payment is not none %}edit-form-payment{% el
 <aside class="sidebar">
 <div class="card">
 <h1>BudgetPilot</h1>
-<div class="small">Hrubá pravda o mesiaci. Bez AI, bez blbostí.</div>
+<div class="small">Pokojný prehľad toho, čo treba zaplatiť a čo ostáva na bežné míňanie.</div>
 </div>
 
 {% if setup_needed and active_view == 'dashboard' %}
 <div class="card" style="border-color:var(--orange)">
-<h2>⚠️ Dokonči nastavenie</h2>
-<div class="small">Chýba deň výplaty alebo reálny zostatok k dnešnému dňu.</div>
+<h2>Doplň základné nastavenie</h2>
+<div class="small">Stačí aktuálny stav účtu a pravidelné platby, aby prehľad začal dávať zmysel.</div>
 <div class="btn-row"><a href="/setup"><button type="button">Otvoriť nastavenie</button></a></div>
 </div>
 {% endif %}
@@ -884,7 +884,7 @@ window.BP_EDIT_TARGET = "{% if edit_payment is not none %}edit-form-payment{% el
 <label><input type="checkbox" name="use_reserve" {% if settings.get('use_reserve') %}checked{% endif %} style="width:auto"> Mám reálnu rezervu bokom</label>
 <label>Rezerva bokom</label>
 <input name="safe_min" value="{{settings.get('safe_min',0)}}">
-<div class="small">Rezerva sa neráta medzi použiteľné peniaze. Zapni iba keď ju máš naozaj bokom.</div>
+<div class="small">Rezerva zostane bokom a nebude sa miešať do peňazí na bežné míňanie.</div>
 <div class="btn-row"><button>Uložiť</button></div>
 </form>
 </div>
@@ -943,7 +943,7 @@ window.BP_EDIT_TARGET = "{% if edit_payment is not none %}edit-form-payment{% el
 </div>
 
 <div class="card">
-<h2>Dlh</h2>
+<h2>Dlhy a pôžičky</h2>
 <form method="post" action="/debt/add">
 <label>Názov / komu-od koho</label><input name="name" placeholder="napr. Peter, pôžička na auto">
 <label>Suma</label><input name="amount" placeholder="napr. 300">
@@ -987,11 +987,11 @@ window.BP_EDIT_TARGET = "{% if edit_payment is not none %}edit-form-payment{% el
 
 {% if active_view == 'receipts' %}
 <div class="card">
-<h2>Účtenka (foto)</h2>
+<h2>Pridať výdavok z účtenky</h2>
 <form method="post" action="/receipt/upload" enctype="multipart/form-data">
 <label>Fotka účtenky</label>
 <input type="file" name="image" accept="image/*" capture="environment" required>
-<div class="small">Rozpozná sumu/dátum ako odhad — vždy si to pred uložením skontroluješ a potvrdíš.</div>
+<div class="small">Rozpoznaná suma je len návrh. Pred uložením ju vždy uvidíš a môžeš opraviť.</div>
 <div class="btn-row"><button>Nahrať a rozpoznať</button></div>
 </form>
 </div>
@@ -1023,7 +1023,7 @@ window.BP_EDIT_TARGET = "{% if edit_payment is not none %}edit-form-payment{% el
 <label>Dátum</label><input name="date" value="{{receipt_review.date or today}}">
 <div class="btn-row">
 <button>Uložiť výdavok</button>
-<a href="/receipts"><button type="button" class="secondary">Zahodiť</button></a>
+<a href="/receipts"><button type="button" class="secondary">Zrušiť</button></a>
 </div>
 </form>
 </div>
@@ -1059,7 +1059,7 @@ window.BP_EDIT_TARGET = "{% if edit_payment is not none %}edit-form-payment{% el
 
 <div class="card section" id="forecast3m">
 <h2>3-mesačný výhľad</h2>
-<div class="small">Plánovaný príjem/platby za celý mesiac — nie to isté ako "bezpečne minúť teraz". Nezahŕňa dlhy ani rezervu.</div>
+<div class="small">Orientácia na najbližšie mesiace. Je to plán za celý mesiac, nie suma dostupná na míňanie dnes.</div>
 <div class="table-scroll">
 <table><tr><th>Mesiac</th><th>Plánovaný príjem</th><th>Plánované platby</th><th>Plán mesiaca</th><th>Stav</th></tr>
 {% for m in forecast_months %}
@@ -1170,16 +1170,16 @@ window.BP_EDIT_TARGET = "{% if edit_payment is not none %}edit-form-payment{% el
 </details>
 
 <div class="card">
-<h2>Môžem minúť?</h2>
+<h2>Overiť nákup</h2>
 <form method="get" action="/payments">
-<div class="inline"><input name="test" placeholder="napr. 50" value="{{test_amount}}"><button>Otestovať</button></div>
+<div class="inline"><input name="test" placeholder="napr. 50" value="{{test_amount}}"><button>Skontrolovať</button></div>
 </form>
 {% if test_result %}<pre>{{test_result}}</pre>{% endif %}
 </div>
 
 <div class="card">
-<h2>Platby (všetky, vrátane šablón)</h2>
-<div class="small">Stav platí pre aktuálny cyklus ({{cycle_key}}). Úprava platby mení iba šablónu, nie stav v tomto cykle.</div>
+<h2>Pravidelné platby</h2>
+<div class="small">Stav platí len pre aktuálny cyklus ({{cycle_key}}). Úprava platby zmení budúce výskyty, nie to, či je tento mesiac zaplatená.</div>
 <div class="table-scroll">
 <table><tr><th>Názov</th><th>Suma</th><th>Deň</th><th>Frekvencia</th><th>Stav</th><th></th></tr>
 {% for x in payments %}
@@ -1206,7 +1206,7 @@ window.BP_EDIT_TARGET = "{% if edit_payment is not none %}edit-form-payment{% el
 
 <div class="card section">
 <h2>Jednorazové platby</h2>
-<div class="small">Platí, iba kým nastane jej termín v tomto mesiaci. Ráta sa do bezpečne minúť rovnako ako pravidelná platba.</div>
+<div class="small">Jednorazová platba sa zaráta do prehľadu v mesiaci, v ktorom má termín.</div>
 {% if onetime_resolved %}
 <div class="table-scroll">
 <table><tr><th>Názov</th><th>Suma</th><th>Termín</th><th>Priorita</th><th>Stav</th><th></th></tr>
@@ -1231,8 +1231,8 @@ window.BP_EDIT_TARGET = "{% if edit_payment is not none %}edit-form-payment{% el
 </div>
 
 <div class="card section">
-<h2>Dlhy</h2>
-<div class="small">Dlžím ja: znižuje bezpečne minúť, keď je nesplatené a v termíne. Dlžia mne: len sledovanie, nezvyšuje bezpečne minúť, kým to reálne nepríde na účet.</div>
+<h2>Dlhy a pôžičky</h2>
+<div class="small">Čo dlžíš ty, znižuje dostupné peniaze. Čo má prísť tebe, je len poznámka, kým to reálne nepríde na účet.</div>
 {% if debts %}
 <div class="table-scroll">
 <table><tr><th>Smer</th><th>Názov</th><th>Suma</th><th>Termín</th><th>Stav</th><th></th></tr>
@@ -1267,7 +1267,7 @@ window.BP_EDIT_TARGET = "{% if edit_payment is not none %}edit-form-payment{% el
 <div class="stat"><span class="stat-value">{{"%.2f"|format(deferred|sum(attribute='amount'))}} €</span><span class="stat-label">spolu</span></div>
 {% if deferred_overdue %}<div class="stat"><span class="stat-value bad">{{deferred_overdue|length}}</span><span class="stat-label">po termíne</span></div>{% endif %}
 </div>
-<div class="small">Odložená platba nikdy nezmizne — po dosiahnutí dátumu sa automaticky vráti medzi nezaplatené.</div>
+<div class="small">Odložené platby ostávajú pod kontrolou. Keď príde ich dátum, vrátia sa medzi nezaplatené.</div>
 </div>
 
 {% if deferred %}
@@ -1299,6 +1299,7 @@ window.BP_EDIT_TARGET = "{% if edit_payment is not none %}edit-form-payment{% el
 {% if active_view == 'expenses' %}
 <div class="card">
 <h2>Výdavky navyše</h2>
+{% if expenses %}
 <div class="table-scroll">
 <table><tr><th>Názov</th><th>Suma</th><th>Dátum</th><th></th></tr>
 {% for x in expenses %}
@@ -1310,6 +1311,7 @@ window.BP_EDIT_TARGET = "{% if edit_payment is not none %}edit-form-payment{% el
 {% endfor %}
 </table>
 </div>
+{% else %}<div class="small">Zatiaľ tu nie sú žiadne ručne pridané výdavky.</div>{% endif %}
 </div>
 {% endif %}
 
@@ -1344,6 +1346,7 @@ window.BP_EDIT_TARGET = "{% if edit_payment is not none %}edit-form-payment{% el
 {% if active_view == 'settings' %}
 <div class="card">
 <h2>Príjmy</h2>
+{% if incomes %}
 <div class="table-scroll">
 <table><tr><th>Názov</th><th>Suma</th><th>Deň</th><th></th></tr>
 {% for x in incomes %}
@@ -1355,15 +1358,15 @@ window.BP_EDIT_TARGET = "{% if edit_payment is not none %}edit-form-payment{% el
 {% endfor %}
 </table>
 </div>
+{% else %}<div class="small">Príjem je voliteľný. Prehľad počíta hlavne z aktuálneho stavu účtu a platieb.</div>{% endif %}
 </div>
 
 <details class="card danger-zone">
-<summary>⚠️ Nebezpečná zóna — vymazať všetko</summary>
+<summary>Citlivá zóna — vymazať všetko</summary>
 <p class="small">
-Zmaže úplne všetky dáta (platby, výdavky, obálky, dlhy, históriu, účtenky, nastavenia) a spustí sa
-odznova prvotný sprievodca. Pred zmazaním sa <strong>automaticky uloží záloha</strong> so značkou dátumu a
-času do <code>backups/</code> na serveri — dá sa z nej v prípade potreby obnoviť ručne. Táto akcia sa
-z appky vrátiť nedá.
+Táto voľba vyčistí platby, výdavky, obálky, dlhy, históriu, účtenky aj nastavenia a potom spustí
+prvotného sprievodcu. Pred vyčistením sa <strong>automaticky uloží záloha</strong> do <code>backups/</code>,
+aby sa dala v prípade potreby obnoviť ručne.
 </p>
 {% if request.args.get('reset_error') %}
 <div class="small" style="color:var(--red);font-weight:700">Kód sa nezhodoval, nič sa nezmazalo. Skús to znova.</div>
@@ -1773,9 +1776,9 @@ z appky vrátiť nedá.
       const note = document.createElement("div");
       note.className = "balance-first-note";
       note.innerHTML =
-        '<strong>Balance-first režim:</strong> výplata sa nepočíta automaticky. ' +
-        'Zdroj pravdy je aktuálny stav účtu, ktorý ručne zadáš. ' +
-        'Odhad = aktuálny stav účtu mínus nezaplatené zadané platby.';
+        '<strong>Počítame z peňazí, ktoré sú na účte teraz.</strong> ' +
+        'Výplata sa nepripočíta dopredu. Odhad vzniká z aktuálneho stavu účtu, ' +
+        'nezaplatených platieb a obálok.';
 
       const main = document.querySelector(".main") || document.querySelector(".app") || document.body;
       main.insertBefore(note, main.firstElementChild || null);
@@ -2062,7 +2065,7 @@ z appky vrátiť nedá.
     const envState = envCls(data, remainingEnv);
 
     const caption = finalValue < 0
-      ? "Chýba " + eur(missing) + ", ak chceš pokryť všetky nezaplatené platby aj zostávajúce obálky."
+      ? "Na pokrytie nezaplatených platieb a obálok treba ešte " + eur(missing) + "."
       : "Po platbách a obálkach ostáva " + eur(finalValue) + ".";
 
     const updatedText = data.last_manual_review
