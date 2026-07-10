@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 import json
+import re
 import shutil
 import subprocess
 import uuid
 from pathlib import Path
 from datetime import date, datetime
 from urllib.parse import urlparse
-from flask import Flask, request, redirect, render_template_string
+from flask import Flask, abort, request, redirect, render_template_string, send_file
 
 import obligations as ob
 import receipts
@@ -41,6 +42,16 @@ AUDIT_ACTION_LABEL = {
 
 def log_audit(action, detail=""):
     audit_log.log_action(AUDIT_LOG_PATH, action, detail)
+
+def _with_day_and_time(entries):
+    # "at" is an ISO datetime string (audit_log.log_action) -- split it once
+    # here so the History view can group entries by day without a Jinja
+    # groupby-on-a-slice, which isn't supported.
+    for e in entries:
+        at = e.get("at") or ""
+        e["day"] = at[:10] if len(at) >= 10 else at
+        e["time"] = at[11:16] if len(at) >= 16 else ""
+    return entries
 
 PRIORITY_LABEL = {
     "mandatory": "nevyhnutná",
@@ -235,7 +246,34 @@ table{width:100%;border-collapse:collapse} th,td{padding:11px 8px;border-bottom:
 .small{font-size:13px;color:var(--muted);line-height:1.35}.inline{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 pre{white-space:pre-wrap;background:#020617;border:1px solid var(--line);border-radius:14px;padding:14px;overflow:auto;max-height:380px;font-size:13px}
 .badge{display:inline-block;padding:5px 9px;border-radius:999px;font-size:12px;background:#374151}
-.badge.ok{background:#14532d} .badge.warn{background:#78350f}
+.badge.ok{background:#14532d} .badge.warn{background:#78350f} .badge.bad{background:rgba(127,29,29,.65);color:#fecaca}
+
+/* Payment/deferred task cards -- accent-colored per state */
+.view-tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+.view-tab{display:inline-flex;align-items:center;gap:6px;padding:9px 13px;border-radius:999px;font-size:13px;font-weight:750;background:rgba(148,163,184,.12);color:#e2e8f0;border:1px solid rgba(148,163,184,.2)}
+.view-tab .tab-badge{background:rgba(2,6,23,.4);border-radius:999px;padding:1px 7px;font-size:11px;font-weight:800}
+.view-tab.tab-red{border-color:rgba(239,68,68,.5)} .view-tab.tab-red .tab-badge{color:#fca5a5}
+.view-tab.tab-orange{border-color:rgba(245,158,11,.5)} .view-tab.tab-orange .tab-badge{color:#fbbf24}
+.view-tab.tab-blue{border-color:rgba(37,99,235,.5)} .view-tab.tab-blue .tab-badge{color:#93c5fd}
+.view-tab.tab-green{border-color:rgba(34,197,94,.5)} .view-tab.tab-green .tab-badge{color:#86efac}
+
+.task-card-list{display:flex;flex-direction:column;gap:10px}
+.task-card{border:1px solid rgba(148,163,184,.18);border-left:4px solid rgba(148,163,184,.4);background:rgba(2,6,23,.4);border-radius:14px;padding:13px 14px}
+.task-card.overdue{border-left-color:var(--red);background:rgba(127,29,29,.14)}
+.task-card.soon{border-left-color:var(--orange);background:rgba(120,53,15,.14)}
+.task-card.pending{border-left-color:#2563eb}
+.task-card.deferred{border-left-color:#b45309;background:rgba(120,53,15,.1)}
+.task-card.paid{border-left-color:#16a34a}
+.task-card-head{display:flex;justify-content:space-between;gap:10px;font-weight:800;font-size:15px}
+.task-card-amount{white-space:nowrap}
+.task-card-amount.overdue{color:#fca5a5} .task-card-amount.soon{color:#fbbf24} .task-card-amount.paid{color:#86efac}
+.task-card-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:space-between;margin-top:5px;font-size:12px;color:var(--muted)}
+.task-card-actions{display:flex;gap:8px;margin-top:11px}
+.task-card-actions .paid-quick-form,.task-card-actions .defer-widget{flex:1}
+.task-card-actions .paid-quick-form button{width:100%;background:#16a34a}
+.task-card-actions .defer-widget .defer-toggle{width:100%;background:transparent;border:1px solid rgba(245,158,11,.5);color:#fbbf24}
+.task-card-more{margin-top:8px}
+.task-card-more summary{cursor:pointer;color:var(--muted);font-size:12px;list-style:none}
 a{color:white;text-decoration:none}
 .topnav{display:flex;flex-wrap:wrap;align-items:center;gap:4px 16px;padding:12px 18px;background:rgba(15,23,42,.97);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:10}
 .topnav .brand{font-weight:900;margin-right:8px}
@@ -343,6 +381,9 @@ body{background:radial-gradient(circle at top left,#1e3a8a 0,#0f172a 34%,#020617
     min-height:52px;justify-content:center;
   }
   .bottomnav a.active{color:var(--text);background:rgba(37,99,235,.22)}
+  .bottomnav a[href="/deferred"].active{background:rgba(180,83,9,.28)}
+  .bottomnav a[href="/envelopes"].active{background:rgba(13,148,136,.28)}
+  .bottomnav a[href="/receipts"].active{background:rgba(124,58,237,.28)}
   .bottomnav .bn-icon{font-size:19px;line-height:1}
   body{padding-bottom:74px}
   .sidebar{display:flex;flex-direction:column}
@@ -493,6 +534,10 @@ details.safety-review-group[open] summary.safety-review-group-title::before{cont
 .envelope-card.warn{border-color:rgba(245,158,11,.6)}
 .envelope-card.over{border-color:rgba(239,68,68,.75);background:rgba(127,29,29,.22)}
 .envelope-card-head{display:flex;justify-content:space-between;align-items:baseline;gap:8px;font-weight:850}
+.envelope-card-title{display:flex;align-items:center;gap:9px}
+.envelope-card-icon{width:34px;height:34px;border-radius:50%;background:rgba(45,212,191,.16);display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0}
+.envelope-card.warn .envelope-card-icon{background:rgba(251,191,36,.16)}
+.envelope-card.over .envelope-card-icon{background:rgba(239,68,68,.18)}
 .envelope-card-name{font-size:16px}
 .envelope-card-remaining{font-size:13px;color:#5eead4;white-space:nowrap}
 .envelope-card.warn .envelope-card-remaining{color:#fbbf24}
@@ -516,6 +561,9 @@ button.tiny.defer-quick{padding:6px 9px;font-size:11px;border-radius:999px;backg
 
 /* Dashboard summary cards -- short overview only, full lists live in their own views */
 .summary-card h2{margin-bottom:10px}
+.summary-card-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:10px}
+.summary-card-head h2{margin-bottom:0}
+.summary-card-link{font-size:12px;color:#93c5fd;font-weight:700;white-space:nowrap}
 .summary-card .btn-row,.summary-card>a{margin-top:12px;display:block}
 .summary-card>a button{width:100%}
 .summary-stats{display:flex;flex-wrap:wrap;gap:14px;margin-bottom:6px}
@@ -523,6 +571,7 @@ button.tiny.defer-quick{padding:6px 9px;font-size:11px;border-radius:999px;backg
 .summary-stats .stat-value{font-size:22px;font-weight:900}
 .summary-stats .stat-value.bad{color:var(--red)}
 .summary-stats .stat-value.warn{color:var(--orange)}
+.summary-stats .stat-value.teal{color:#5eead4}
 .summary-stats .stat-label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
 .deferred-mini-list,.deferred-detail-list{display:flex;flex-direction:column;gap:6px;margin-top:8px}
 .deferred-mini-row{display:flex;justify-content:space-between;gap:10px;font-size:13px;padding:6px 0;border-bottom:1px solid rgba(148,163,184,.12)}
@@ -627,24 +676,27 @@ button.tiny.defer-quick{padding:6px 9px;font-size:11px;border-radius:999px;backg
   border:1px solid rgba(147,197,253,.35);border-radius:24px;
   padding:16px 18px;box-shadow:0 22px 70px rgba(0,0,0,.38)
 }
-.real-top-head{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;margin-bottom:12px}
-.real-top h2{margin:0 0 4px;font-size:23px}
-.real-top .hint{color:#bfdbfe;font-size:13px;line-height:1.35}
-.real-top-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
-.real-top-btn{display:inline-flex;align-items:center;justify-content:center;border-radius:999px;padding:10px 13px;font-size:13px;font-weight:850;color:white;background:#2563eb;border:1px solid rgba(255,255,255,.14);text-decoration:none}
-.real-top-btn.ocr{background:#7c3aed}.real-top-btn.env{background:#0f766e}
-.real-hero{text-align:center;padding:18px 10px 6px;margin-bottom:8px}
-.real-hero-value{font-size:52px;font-weight:950;line-height:1;letter-spacing:-.02em}
+.real-top-head{margin-bottom:2px}
+.real-top h2{margin:0;font-size:19px;font-weight:800;color:#dbeafe}
+.real-hero{text-align:center;padding:14px 10px 2px;margin-bottom:4px}
+.real-hero-value{font-size:46px;font-weight:950;line-height:1;letter-spacing:-.02em}
 .real-hero-value.good{color:#86efac}.real-hero-value.warn{color:#fbbf24}.real-hero-value.bad{color:#fca5a5}
 .real-hero-caption{margin-top:10px;font-size:14px;font-weight:750;line-height:1.4}
 .real-hero-caption.ok{color:#bfdbfe}
 .real-hero-caption.bad{color:#fecaca;background:rgba(127,29,29,.4);border:1px solid rgba(248,113,113,.5);border-radius:14px;padding:9px 14px;display:inline-block}
-.real-sub-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:12px}
+.real-sub-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:14px 0 6px}
 .real-metric{background:rgba(2,6,23,.43);border:1px solid rgba(148,163,184,.18);border-radius:16px;padding:12px}
 .real-label{color:#cbd5e1;font-size:12px;line-height:1.25}
 .real-value{margin-top:5px;font-size:21px;font-weight:900;white-space:nowrap}
 .real-value.good{color:#86efac}.real-value.warn{color:#fbbf24}.real-value.bad{color:#fecaca}.real-value.teal{color:#5eead4}
-.real-formula{margin-bottom:12px}
+.real-updated-line{display:flex;align-items:center;justify-content:center;gap:6px;font-size:12px;color:#94a3b8;margin:6px 0 10px}
+.real-refresh-btn{width:22px;height:22px;border-radius:999px;background:rgba(148,163,184,.16);border:0;color:#cbd5e1;cursor:pointer;font-size:12px;display:inline-flex;align-items:center;justify-content:center;padding:0;line-height:1}
+.real-refresh-btn.spinning{animation:bp-spin .6s linear}
+@keyframes bp-spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+.real-balance-toggle{text-align:center;margin-bottom:6px}
+.real-balance-toggle summary{cursor:pointer;color:#93c5fd;font-size:12px;font-weight:700;list-style:none;display:inline-block}
+.real-balance-toggle summary::-webkit-details-marker{display:none}
+.real-formula{margin-bottom:6px}
 .real-formula summary{cursor:pointer;color:#cbd5e1;font-size:12px;font-weight:700;list-style:none;margin-bottom:8px}
 .real-formula summary::-webkit-details-marker{display:none}
 .real-formula summary::before{content:"▸ ";display:inline-block}
@@ -652,15 +704,22 @@ button.tiny.defer-quick{padding:6px 9px;font-size:11px;border-radius:999px;backg
 .real-calc{display:grid;grid-template-columns:1fr auto;gap:8px 12px;background:rgba(2,6,23,.35);border:1px solid rgba(148,163,184,.16);border-radius:16px;padding:12px}
 .real-calc .amount{text-align:right;font-weight:950}
 .real-calc .total{border-top:1px solid rgba(148,163,184,.20);padding-top:8px;font-weight:950;font-size:16px}
-.real-update{display:grid;grid-template-columns:1fr 170px 120px;gap:8px;align-items:end;margin-bottom:10px}
+.real-update{display:grid;grid-template-columns:1fr 170px 120px;gap:8px;align-items:end;margin:8px 0 0}
 .real-update label{display:block;color:#cbd5e1;font-size:12px;margin-bottom:5px}
 .real-update input{width:100%;padding:10px 11px;border-radius:12px}
 .real-update button{width:100%;padding:10px 11px;border-radius:12px}
-.real-chips{display:flex;gap:8px;flex-wrap:wrap}
-.real-chip{background:rgba(2,6,23,.38);border:1px solid rgba(148,163,184,.18);border-radius:999px;padding:7px 10px;font-size:13px;color:#e5e7eb}
-.real-chip.over{background:rgba(127,29,29,.35);border-color:rgba(248,113,113,.4)}
-@media(max-width:1000px){.real-sub-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.real-top-head{flex-direction:column}.real-top-actions{justify-content:flex-start}}
-@media(max-width:650px){.real-top{border-radius:18px;padding:14px}.real-hero-value{font-size:38px}.real-sub-grid{grid-template-columns:1fr}.real-update{grid-template-columns:1fr}.real-top-btn{width:calc(50% - 4px)}}
+@media(max-width:1000px){.real-sub-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:650px){.real-top{border-radius:18px;padding:16px}.real-hero-value{font-size:36px}.real-sub-grid{grid-template-columns:1fr}.real-update{grid-template-columns:1fr}}
+
+/* Quick action pills below the hero card -- 2-column on mobile per spec */
+.quick-actions-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:16px}
+.qa-btn{display:flex;align-items:center;justify-content:center;gap:6px;padding:13px 8px;border-radius:14px;font-size:13px;font-weight:800;text-decoration:none;text-align:center}
+.qa-blue{background:#2563eb;color:white}
+.qa-purple{background:#7c3aed;color:white}
+.qa-orange{background:rgba(245,158,11,.14);color:#fbbf24;border:1px solid rgba(245,158,11,.4)}
+.qa-teal{background:rgba(45,212,191,.14);color:#5eead4;border:1px solid rgba(45,212,191,.4)}
+.qa-gray{background:rgba(148,163,184,.14);color:#e2e8f0;border:1px solid rgba(148,163,184,.25)}
+@media(min-width:700px){.quick-actions-grid{grid-template-columns:repeat(3,1fr)}}
 
 /* BP_OCR_CANDIDATES_V1: OCR amount candidates in the receipt review card */
 .candidate-list{display:flex;flex-direction:column;gap:6px;margin:8px 0}
@@ -670,6 +729,16 @@ button.tiny.defer-quick{padding:6px 9px;font-size:11px;border-radius:999px;backg
 .candidate.not-recommended{color:#94a3b8;border-style:dashed}
 .candidate-tag{font-size:11px;font-weight:800;padding:3px 8px;border-radius:999px;background:#7c3aed;color:white;white-space:nowrap}
 .candidate-tag.not-recommended{background:transparent;border:1px solid #475569;color:#94a3b8}
+.receipt-thumb{display:block;width:100%;max-height:260px;object-fit:contain;background:#020617;border:1px solid rgba(124,58,237,.35);border-radius:14px;margin:10px 0}
+
+/* History timeline */
+.timeline{display:flex;flex-direction:column;gap:18px}
+.timeline-day-label{font-size:12px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid rgba(148,163,184,.14)}
+.timeline-list{display:flex;flex-direction:column;gap:6px}
+.timeline-row{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;padding:8px 10px;border-radius:10px;background:rgba(2,6,23,.35);font-size:13px}
+.timeline-time{color:var(--muted);font-variant-numeric:tabular-nums;flex-shrink:0}
+.timeline-action{font-weight:750;flex-shrink:0}
+.timeline-detail{color:var(--muted);overflow-wrap:anywhere}
 
 </style>
 </head>
@@ -711,21 +780,55 @@ button.tiny.defer-quick{padding:6px 9px;font-size:11px;border-radius:999px;backg
 </form>
 </div>
 {% endmacro %}
-{% macro unpaid_rows(items) %}
-<div class="table-scroll">
-<table><tr><th>Názov</th><th>Suma</th><th>Termín</th><th>Priorita</th><th>Naliehavosť</th><th></th></tr>
+{% macro unpaid_rows(items, accent) %}
+<div class="task-card-list">
 {% for p in items %}
-<tr data-payment-id="{{p.get('id','')}}" data-cycle-key="{{p.get('origin_cycle_key', cycle_key)}}">
-<td>{{p.name}}{% if p.get('carryover_label') %}<br><span class="small">{{p.carryover_label}}</span>{% endif %}</td>
-<td>{{p.amount}} €</td><td>{{p.due_date}}</td><td>{{p.get('priority','-')}}</td>
-<td class="urgency-{{p.urgency}}">{{urgency_label_sk.get(p.urgency, p.urgency)}}</td>
-<td class="actions-stack">
+<div class="task-card {{accent}}" data-payment-id="{{p.get('id','')}}" data-cycle-key="{{p.get('origin_cycle_key', cycle_key)}}">
+<div class="task-card-head">
+<span class="task-card-name">{{p.name}}{% if p.get('carryover_label') %}<br><span class="small">{{p.carryover_label}}</span>{% endif %}</span>
+<span class="task-card-amount {{accent}}">{{p.amount}} €</span>
+</div>
+<div class="task-card-meta">
+<span>Splatné {{p.due_date}}</span>
+{% if p.urgency == 'overdue' %}<span class="badge bad">po splatnosti</span>
+{% elif p.urgency in ('due_today','soon') %}<span class="badge warn">čoskoro</span>
+{% endif %}
+</div>
+<div class="task-card-actions">
 {{ paid_button(p.get('id',''), p.get('origin_cycle_key', cycle_key)) }}
 {{ defer_widget(p.get('id',''), p.get('origin_cycle_key', cycle_key), '↷ Odložiť') }}
+</div>
+<details class="task-card-more"><summary>Iný stav (priorita: {{p.get('priority','-')}})</summary>
 {{ state_form(p.get('id',''), p.get('origin_cycle_key', cycle_key), selectable_states, state_label) }}
-</td></tr>
+</details>
+</div>
 {% endfor %}
-</table>
+</div>
+{% endmacro %}
+{% macro deferred_rows(items) %}
+<div class="task-card-list">
+{% for p in items %}
+<div class="task-card deferred" data-payment-id="{{p.get('id','')}}" data-cycle-key="{{p.get('origin_cycle_key', cycle_key)}}">
+<div class="task-card-head">
+<span class="task-card-name">{{p.name}}</span>
+<span class="task-card-amount deferred">{{p.amount}} €</span>
+</div>
+<div class="task-card-meta">
+<span>Odložené do {{p.get('deferred_to','-')}} · pôvodne {{p.get('origin_cycle_key','-')}}</span>
+{% if p.get('days_left') is not none %}
+{% if p.days_left < 0 %}<span class="badge bad">po termíne</span>
+{% elif p.days_left <= 7 %}<span class="badge warn">o {{p.days_left}} {% if p.days_left == 1 %}deň{% elif p.days_left < 5 %}dni{% else %}dní{% endif %}</span>
+{% else %}<span class="badge">o {{p.days_left}} dní</span>
+{% endif %}
+{% endif %}
+</div>
+{% if p.get('note') %}<div class="small">Poznámka: {{p.note}}</div>{% endif %}
+<div class="task-card-actions">
+{{ paid_button(p.get('id',''), p.get('origin_cycle_key', cycle_key)) }}
+{{ defer_widget(p.get('id',''), p.get('origin_cycle_key', cycle_key), 'Zmeniť dátum') }}
+</div>
+</div>
+{% endfor %}
 </div>
 {% endmacro %}
 <script>
@@ -891,6 +994,7 @@ window.BP_EDIT_TARGET = "{% if edit_payment is not none %}edit-form-payment{% el
 <div class="card" id="receipt-review" style="border-color:#7c3aed">
 <h2>📷 Potvrdiť účtenku</h2>
 <div class="small">Odhad z OCR — over si sumu a dátum, priradí sa kategória, a až potom sa uloží ako výdavok.</div>
+<img class="receipt-thumb" src="/receipt/image/{{receipt_review.receipt_id}}" alt="Fotka účtenky">
 <form method="post" action="/receipt/confirm">
 <input type="hidden" name="receipt_id" value="{{receipt_review.receipt_id}}">
 <input type="hidden" name="image_path" value="{{receipt_review.image_path}}">
@@ -906,10 +1010,10 @@ window.BP_EDIT_TARGET = "{% if edit_payment is not none %}edit-form-payment{% el
 {% endfor %}
 </div>
 {% endif %}
-<label>Kategória</label>
+<label>Vybraná suma</label><input id="receipt-amount" name="amount" value="{{receipt_review.amount or ''}}" placeholder="skontroluj sumu">
+<label>Obálka</label>
 <select name="name">{% for t in expense_types %}<option {% if t=='Iné' %}selected{% endif %}>{{t}}</option>{% endfor %}</select>
-<label>Suma</label><input id="receipt-amount" name="amount" value="{{receipt_review.amount or ''}}" placeholder="skontroluj sumu">
-<label>Poznámka / obchod (voliteľné)</label><input name="merchant" value="{{receipt_review.merchant or ''}}" placeholder="napr. Lidl">
+<label>Poznámka (voliteľné, aj obchod)</label><input name="merchant" value="{{receipt_review.merchant or ''}}" placeholder="napr. Lidl">
 <label>Dátum</label><input name="date" value="{{receipt_review.date or today}}">
 <div class="btn-row">
 <button>Uložiť výdavok</button>
@@ -967,21 +1071,21 @@ window.BP_EDIT_TARGET = "{% if edit_payment is not none %}edit-form-payment{% el
 
 {% if active_view == 'dashboard' %}
 <div class="card summary-card payments-summary">
-<h2>🧾 Platby</h2>
+<div class="summary-card-head"><h2>🧾 Platby</h2><a class="summary-card-link" href="/payments">Zobraziť všetky →</a></div>
 <div class="summary-stats">
 <div class="stat"><div class="stat-value">{{unpaid|length}}</div><div class="stat-label">nezaplatené</div></div>
 <div class="stat"><div class="stat-value {% if unpaid_overdue|length %}bad{% endif %}">{{unpaid_overdue|length}}</div><div class="stat-label">po splatnosti</div></div>
 <div class="stat"><div class="stat-value {% if unpaid_soon|length %}warn{% endif %}">{{unpaid_soon|length}}</div><div class="stat-label">čoskoro</div></div>
-<div class="stat"><div class="stat-value">{{summary.unpaid_total}}</div><div class="stat-label">spolu</div></div>
 </div>
+<div class="small">Spolu nezaplatené {{summary.unpaid_total}}</div>
 <a href="/payments"><button type="button">Otvoriť platby</button></a>
 </div>
 
 <div class="card summary-card deferred-summary">
-<h2>↷ Odložené platby</h2>
+<div class="summary-card-head"><h2>↷ Odložené platby</h2><a class="summary-card-link" href="/deferred">Zobraziť všetky →</a></div>
 {% if deferred %}
 <div class="summary-stats">
-<div class="stat"><div class="stat-value">{{deferred|sum(attribute='amount')|round(2)}} €</div><div class="stat-label">odložené</div></div>
+<div class="stat"><div class="stat-value warn">{{"%.2f"|format(deferred|sum(attribute='amount'))}} €</div><div class="stat-label">odložené</div></div>
 <div class="stat"><div class="stat-value">{{deferred|length}}</div><div class="stat-label">počet</div></div>
 </div>
 {% set next_deferred = deferred|sort(attribute='deferred_to')|first %}
@@ -996,11 +1100,11 @@ window.BP_EDIT_TARGET = "{% if edit_payment is not none %}edit-form-payment{% el
 </div>
 
 <div class="card summary-card envelopes-summary-dashboard">
-<h2>✉ Obálky</h2>
+<div class="summary-card-head"><h2>✉ Obálky</h2><a class="summary-card-link" href="/envelopes">Zobraziť všetky →</a></div>
 <div class="summary-stats">
 <div class="stat"><div class="stat-value">{{"%.2f"|format(envelope_totals.total_limit)}} €</div><div class="stat-label">plán</div></div>
 <div class="stat"><div class="stat-value">{{"%.2f"|format(envelope_totals.total_spent)}} €</div><div class="stat-label">minuté</div></div>
-<div class="stat"><div class="stat-value">{{"%.2f"|format(envelope_totals.total_remaining)}} €</div><div class="stat-label">ostáva</div></div>
+<div class="stat"><div class="stat-value teal">{{"%.2f"|format(envelope_totals.total_remaining)}} €</div><div class="stat-label">ostáva</div></div>
 </div>
 {% for r in envelope_rows[:3] %}
 <div class="deferred-mini-row"><span>{{r.category}}</span><span>{{"%.2f"|format(r.remaining)}} € ostáva</span></div>
@@ -1009,7 +1113,7 @@ window.BP_EDIT_TARGET = "{% if edit_payment is not none %}edit-form-payment{% el
 </div>
 
 <div class="card summary-card activity-summary">
-<h2>🕘 Nedávna aktivita</h2>
+<div class="summary-card-head"><h2>🕘 Nedávna aktivita</h2><a class="summary-card-link" href="/history">Zobraziť všetky →</a></div>
 {% if audit_entries %}
 {% for a in audit_entries[:5] %}
 <div class="deferred-mini-row"><span>{{audit_action_label.get(a.action, a.action)}}</span><span class="small">{{a.at}}</span></div>
@@ -1020,30 +1124,41 @@ window.BP_EDIT_TARGET = "{% if edit_payment is not none %}edit-form-payment{% el
 {% endif %}
 
 {% if active_view == 'payments' %}
-<div class="card section">
+<div class="view-tabs">
+<a href="#po-splatnosti" class="view-tab tab-red">Po splatnosti <span class="tab-badge">{{unpaid_overdue|length}}</span></a>
+<a href="#coskoro" class="view-tab tab-orange">Čoskoro <span class="tab-badge">{{unpaid_soon|length}}</span></a>
+<a href="#caka" class="view-tab tab-blue">Čaká <span class="tab-badge">{{unpaid_pending|length}}</span></a>
+<a href="#zaplatene" class="view-tab tab-green">Zaplatené <span class="tab-badge">{{paid|length}}</span></a>
+</div>
+
+<div class="card section" id="po-splatnosti">
 <h2>Po splatnosti ({{unpaid_overdue|length}})</h2>
-{% if unpaid_overdue %}{{ unpaid_rows(unpaid_overdue) }}{% else %}<div class="small">Nič po splatnosti. ✅</div>{% endif %}
+{% if unpaid_overdue %}{{ unpaid_rows(unpaid_overdue, 'overdue') }}{% else %}<div class="small">Nič po splatnosti. ✅</div>{% endif %}
 </div>
 
-<div class="card section">
-<h2>Splatné čoskoro ({{unpaid_soon|length}})</h2>
-{% if unpaid_soon %}{{ unpaid_rows(unpaid_soon) }}{% else %}<div class="small">Nič v najbližších dňoch.</div>{% endif %}
+<div class="card section" id="coskoro">
+<h2>Čoskoro (do 3 dní) ({{unpaid_soon|length}})</h2>
+{% if unpaid_soon %}{{ unpaid_rows(unpaid_soon, 'soon') }}{% else %}<div class="small">Nič v najbližších dňoch.</div>{% endif %}
 </div>
 
-<div class="card section">
+<div class="card section" id="caka">
 <h2>Čaká na potvrdenie ({{unpaid_pending|length}})</h2>
-{% if unpaid_pending %}{{ unpaid_rows(unpaid_pending) }}{% else %}<div class="small">Nič nečaká na zaplatenie. ✅</div>{% endif %}
+{% if unpaid_pending %}{{ unpaid_rows(unpaid_pending, 'pending') }}{% else %}<div class="small">Nič nečaká na zaplatenie. ✅</div>{% endif %}
 </div>
 
-<details class="card section">
+<details class="card section" id="zaplatene" open>
 <summary>Zaplatené ({{paid|length}})</summary>
 {% if paid %}
-<div class="table-scroll">
-<table><tr><th>Názov</th><th>Suma</th><th>Stav</th></tr>
+<div class="task-card-list">
 {% for p in paid %}
-<tr><td>{{p.name}}</td><td>{{p.amount}} €</td><td><span class="badge {{state_badge_class.get(p.state,'')}}">{{state_label.get(p.state, p.state)}}</span></td></tr>
+<div class="task-card paid">
+<div class="task-card-head">
+<span class="task-card-name">{{p.name}}</span>
+<span class="task-card-amount paid">{{p.amount}} €</span>
+</div>
+<div class="task-card-meta"><span class="badge {{state_badge_class.get(p.state,'')}}">{{state_label.get(p.state, p.state)}}</span></div>
+</div>
 {% endfor %}
-</table>
 </div>
 {% else %}<div class="small">Zatiaľ nič zaplatené v tomto cykle.</div>{% endif %}
 </details>
@@ -1139,31 +1254,40 @@ window.BP_EDIT_TARGET = "{% if edit_payment is not none %}edit-form-payment{% el
 {% endif %}
 
 {% if active_view == 'deferred' %}
-<div class="card section">
-<h2>Odložené platby ({{deferred|length}})</h2>
+<div class="card summary-card">
+<div class="summary-card-head"><h2>Odložené platby ({{deferred|length}})</h2></div>
+<div class="summary-stats">
+<div class="stat"><span class="stat-value warn">{{deferred|length}}</span><span class="stat-label">odložených</span></div>
+<div class="stat"><span class="stat-value">{{"%.2f"|format(deferred|sum(attribute='amount'))}} €</span><span class="stat-label">spolu</span></div>
+{% if deferred_overdue %}<div class="stat"><span class="stat-value bad">{{deferred_overdue|length}}</span><span class="stat-label">po termíne</span></div>{% endif %}
+</div>
 <div class="small">Odložená platba nikdy nezmizne — po dosiahnutí dátumu sa automaticky vráti medzi nezaplatené.</div>
+</div>
+
 {% if deferred %}
-<div class="deferred-detail-list">
-{% for p in deferred|sort(attribute='deferred_to') %}
-<div class="deferred-detail-row {% if p.get('days_left') is not none and p.days_left < 0 %}overdue{% endif %}">
-<div class="deferred-detail-head">
-<span class="deferred-detail-name">{{p.name}}</span>
-<span class="deferred-detail-amount">{{p.amount}} €</span>
+<div class="view-tabs">
+<a href="#d-po-terminie" class="view-tab tab-red">Po termíne <span class="tab-badge">{{deferred_overdue|length}}</span></a>
+<a href="#d-coskoro" class="view-tab tab-orange">Čoskoro <span class="tab-badge">{{deferred_soon|length}}</span></a>
+<a href="#d-neskor" class="view-tab tab-blue">Neskôr <span class="tab-badge">{{deferred_later|length}}</span></a>
 </div>
-<div class="small">Pôvodný cyklus: {{p.get('origin_cycle_key','-')}} · Odložené do: {{p.get('deferred_to','-')}}
-{% if p.get('days_left') is not none %}
-{% if p.days_left < 0 %}<span class="badge">Po termíne</span>{% else %} · o {{p.days_left}} {% if p.days_left == 1 %}deň{% elif p.days_left < 5 %}dni{% else %}dní{% endif %}{% endif %}
+
+<div class="card section" id="d-po-terminie">
+<h2>Po termíne</h2>
+{% if deferred_overdue %}{{ deferred_rows(deferred_overdue|sort(attribute='deferred_to')) }}{% else %}<div class="small">Nič po termíne. ✅</div>{% endif %}
+</div>
+
+<div class="card section" id="d-coskoro">
+<h2>Čoskoro (do 7 dní)</h2>
+{% if deferred_soon %}{{ deferred_rows(deferred_soon|sort(attribute='deferred_to')) }}{% else %}<div class="small">Nič v najbližších 7 dňoch.</div>{% endif %}
+</div>
+
+<div class="card section" id="d-neskor">
+<h2>Neskôr</h2>
+{% if deferred_later %}{{ deferred_rows(deferred_later|sort(attribute='deferred_to')) }}{% else %}<div class="small">Nič ďalšie odložené.</div>{% endif %}
+</div>
+{% else %}
+<div class="card section"><div class="small">Žiadne odložené platby. ✅</div></div>
 {% endif %}
-</div>
-<div class="pay-actions">
-{{ paid_button(p.get('id',''), p.get('origin_cycle_key', cycle_key)) }}
-{{ defer_widget(p.get('id',''), p.get('origin_cycle_key', cycle_key), 'Zmeniť dátum') }}
-</div>
-</div>
-{% endfor %}
-</div>
-{% else %}<div class="small">Žiadne odložené platby. ✅</div>{% endif %}
-</div>
 {% endif %}
 
 {% if active_view == 'expenses' %}
@@ -1250,12 +1374,21 @@ z appky vrátiť nedá.
 <div class="card">
 <h2>História zmien ({{audit_entries|length}})</h2>
 {% if audit_entries %}
-<div class="table-scroll">
-<table><tr><th>Kedy</th><th>Akcia</th><th>Detail</th></tr>
-{% for a in audit_entries %}
-<tr><td>{{a.at}}</td><td>{{audit_action_label.get(a.action, a.action)}}</td><td>{{a.detail}}</td></tr>
+<div class="timeline">
+{% for day, day_entries in audit_entries|groupby('day')|reverse %}
+<div class="timeline-day">
+<div class="timeline-day-label">{{day}}</div>
+<div class="timeline-list">
+{% for a in day_entries %}
+<div class="timeline-row">
+<span class="timeline-time">{{a.time}}</span>
+<span class="timeline-action">{{audit_action_label.get(a.action, a.action)}}</span>
+<span class="timeline-detail">{{a.detail}}</span>
+</div>
 {% endfor %}
-</table>
+</div>
+</div>
+{% endfor %}
 </div>
 {% else %}<div class="small">Zatiaľ žiadna aktivita.</div>{% endif %}
 </div>
@@ -1661,6 +1794,17 @@ z appky vrátiť nedá.
     }) + " €";
   }
 
+  function envelopeIcon(name){
+    const n = (name || "").toLowerCase();
+    if(/strava|potravin|jedlo|food/.test(n)) return "🛒";
+    if(/nafta|palivo|fuel|benzin/.test(n)) return "⛽";
+    if(/byv|domac|najom|hypotek/.test(n)) return "🏠";
+    if(/zabav|volny|hobby/.test(n)) return "🎮";
+    if(/oblec|shop/.test(n)) return "👕";
+    if(/zdrav|lekar|liek/.test(n)) return "💊";
+    return "💶";
+  }
+
   function addCard(summary){
     if(document.querySelector(".editable-envelopes")) return;
 
@@ -1694,7 +1838,8 @@ z appky vrátiť nedá.
       envCard.className = "envelope-card" + (state ? " " + state : "");
       envCard.innerHTML =
         '<div class="envelope-card-head">' +
-          '<span class="envelope-card-name">'+(e.name||"Obálka")+'</span>' +
+          '<span class="envelope-card-title"><span class="envelope-card-icon">'+envelopeIcon(e.name)+'</span>' +
+          '<span class="envelope-card-name">'+(e.name||"Obálka")+'</span></span>' +
           '<span class="envelope-card-remaining">'+eur(remaining)+' ostáva</span>' +
         '</div>' +
         '<div class="envelope-progress-bar"><div class="envelope-progress-fill'+(state?" "+state:"")+'" style="width:'+pct+'%"></div></div>' +
@@ -1884,6 +2029,16 @@ z appky vrátiť nedá.
     if(total > 0 && (remainingEnv/total) <= 0.15) return "warn";
     return "teal";
   }
+  function formatUpdated(iso){
+    const d = new Date(iso);
+    if(isNaN(d.getTime())) return iso;
+    const now = new Date();
+    const pad = function(n){ return String(n).padStart(2,"0"); };
+    const time = pad(d.getHours()) + ":" + pad(d.getMinutes());
+    const sameDay = d.toDateString() === now.toDateString();
+    if(sameDay) return "dnes " + time;
+    return pad(d.getDate()) + "." + pad(d.getMonth()+1) + ". " + time;
+  }
 
   function hideOldMetricCards(){
     document.querySelectorAll(".topgrid,.summarygrid,.envelope-summary,.fin-overview").forEach(function(el){
@@ -1904,20 +2059,14 @@ z appky vrátiť nedá.
       ? "Chýba " + eur(missing) + ", ak chceš pokryť všetky nezaplatené platby aj zostávajúce obálky."
       : "Po platbách a obálkach ostáva " + eur(finalValue) + ".";
 
+    const updatedText = data.last_manual_review
+      ? "Aktualizované: " + formatUpdated(data.last_manual_review)
+      : "Stav účtu ešte nebol zadaný";
+
     const card = document.createElement("section");
     card.className = "real-top";
     card.innerHTML =
-      '<div class="real-top-head">' +
-        '<div><h2>Reálny mesačný prehľad</h2>' +
-        '<div class="hint">Účet - nezaplatené platby - zostávajúce obálky. Výdavok Potraviny/Nafta znižuje príslušnú obálku.</div></div>' +
-        '<div class="real-top-actions">' +
-          '<a class="real-top-btn add" href="#expense-quick">+ Výdavok</a>' +
-          '<a class="real-top-btn ocr" href="/receipts">📷 OCR bloček</a>' +
-          '<a class="real-top-btn pay" href="#payment-review">✓ Platby</a>' +
-          '<a class="real-top-btn env" href="#envelopes">✉ Obálky</a>' +
-          '<a class="real-top-btn balance" href="#balance-update-field">✎ Stav účtu</a>' +
-        '</div>' +
-      '</div>' +
+      '<div class="real-top-head"><h2>Reálny mesačný prehľad</h2></div>' +
       '<div class="real-hero">' +
         '<div class="real-hero-value '+cls(finalValue)+'">'+eur(finalValue)+'</div>' +
         '<div class="real-hero-caption '+(finalValue < 0 ? 'bad' : 'ok')+'">'+caption+'</div>' +
@@ -1927,52 +2076,56 @@ z appky vrátiť nedá.
         '<div class="real-metric"><div class="real-label">Nezaplatené</div><div class="real-value bad">-'+eur(data.unpaid_payments_total)+'</div></div>' +
         '<div class="real-metric"><div class="real-label">Obálky ostáva</div><div class="real-value '+envState+'">'+eur(remainingEnv)+'</div></div>' +
       '</div>' +
-      '<form class="real-update" id="balance-update-field" method="post" action="/api/balance/update">' +
-        '<div><label>Rýchla aktualizácia stavu účtu</label><input name="account_balance" inputmode="decimal" type="number" step="0.01" value="'+Number(data.current_balance||0)+'"></div>' +
-        '<div><label>Posledná aktualizácia</label><input disabled value="'+(data.last_manual_review || "nezadané")+'"></div>' +
-        '<div><button type="submit">Uložiť stav</button></div>' +
-      '</form>' +
+      '<div class="real-updated-line">' +
+        '<button type="button" class="real-refresh-btn" title="Obnoviť">↻</button>' +
+        '<span>'+updatedText+'</span>' +
+      '</div>' +
+      '<details class="real-balance-toggle" id="balance-update-field">' +
+        '<summary>✎ Upraviť stav účtu</summary>' +
+        '<form class="real-update" method="post" action="/api/balance/update">' +
+          '<div><label>Nový stav účtu</label><input name="account_balance" inputmode="decimal" type="number" step="0.01" value="'+Number(data.current_balance||0)+'"></div>' +
+          '<div><button type="submit">Uložiť stav</button></div>' +
+        '</form>' +
+      '</details>' +
       '<details class="real-formula"><summary>Vzorec výpočtu</summary>' +
       '<div class="real-calc">' +
         '<div>Aktuálny stav účtu</div><div class="amount">'+eur(data.current_balance)+'</div>' +
         '<div>- nezaplatené platby</div><div class="amount bad">-'+eur(data.unpaid_payments_total)+'</div>' +
         '<div>- zostávajúce obálky</div><div class="amount warn">-'+eur(remainingEnv)+'</div>' +
         '<div class="total">= reálny odhad</div><div class="amount total '+cls(finalValue)+'">'+eur(finalValue)+'</div>' +
-      '</div></details>' +
-      '<div class="real-chips"></div>';
-
-    const chips = card.querySelector(".real-chips");
-
-    [
-      "Obálky plán: " + eur(data.envelopes_total),
-      "Obálky minuté: " + eur(data.envelopes_spent_total || 0),
-      "Obálky ostáva: " + eur(remainingEnv),
-      "Odložené: " + eur(data.deferred_payments_total || 0),
-      "Po splatnosti: " + Number(data.overdue_count || 0)
-    ].forEach(function(text){
-      const chip=document.createElement("div");
-      chip.className="real-chip";
-      chip.textContent=text;
-      chips.appendChild(chip);
-    });
-
-    if(data.envelope_items && data.envelope_items.length){
-      data.envelope_items.forEach(function(item){
-        const chip=document.createElement("div");
-        chip.className="real-chip" + (Number(item.over||0)>0 ? " over" : "");
-        chip.textContent=item.name + ": plán " + eur(item.budget ?? item.amount) + " / minuté " + eur(item.spent || 0) + " / ostáva " + eur(item.remaining || 0);
-        chips.appendChild(chip);
-      });
-    }
+      '</div></details>';
 
     const main=document.querySelector(".main") || document.querySelector(".app") || document.body;
     main.insertBefore(card, main.firstElementChild || null);
 
-    const env=card.querySelector(".real-top-btn.env");
-    if(env){
-      env.addEventListener("click", function(e){
-        const target=document.querySelector(".editable-envelopes") || document.querySelector("#envelopes");
-        if(target){ e.preventDefault(); target.scrollIntoView({behavior:"smooth", block:"start"}); }
+    const quick = document.createElement("div");
+    quick.className = "quick-actions-grid";
+    quick.innerHTML =
+      '<a class="qa-btn qa-blue" href="/expenses#expense-quick">+ Výdavok</a>' +
+      '<a class="qa-btn qa-purple" href="/receipts">📷 OCR bloček</a>' +
+      '<a class="qa-btn qa-blue" href="/payments">✓ Platby</a>' +
+      '<a class="qa-btn qa-orange" href="/deferred">↷ Odložené</a>' +
+      '<a class="qa-btn qa-teal" href="/envelopes">✉ Obálky</a>' +
+      '<a class="qa-btn qa-gray" href="#balance-update-field">✎ Stav účtu</a>';
+    card.insertAdjacentElement("afterend", quick);
+
+    const refreshBtn = card.querySelector(".real-refresh-btn");
+    if(refreshBtn){
+      refreshBtn.addEventListener("click", function(){
+        refreshBtn.classList.add("spinning");
+        setTimeout(function(){ window.location.reload(); }, 250);
+      });
+    }
+
+    const balanceBtn = quick.querySelector(".qa-gray");
+    if(balanceBtn){
+      balanceBtn.addEventListener("click", function(e){
+        const details = document.getElementById("balance-update-field");
+        if(details){
+          e.preventDefault();
+          details.open = true;
+          details.scrollIntoView({behavior:"smooth", block:"start"});
+        }
       });
     }
   }
@@ -2200,6 +2353,13 @@ def render_page(edit_income=None, edit_payment=None, edit_expense=None, active_v
         deferred_to_raw = p.get("deferred_to")
         p["days_left"] = (date.fromisoformat(deferred_to_raw) - today).days if deferred_to_raw else None
 
+    # Split for the /deferred view's tabs -- same display-only grouping
+    # pattern as unpaid_overdue/soon/pending above, never changes what
+    # counts as deferred.
+    deferred_overdue = [p for p in groups["deferred"] if p.get("days_left") is not None and p["days_left"] < 0]
+    deferred_soon = [p for p in groups["deferred"] if p.get("days_left") is not None and 0 <= p["days_left"] <= 7]
+    deferred_later = [p for p in groups["deferred"] if p.get("days_left") is None or p["days_left"] > 7]
+
     debts = load(DEBTS, [])
 
     onetime = load(ONETIME, [])
@@ -2262,6 +2422,7 @@ def render_page(edit_income=None, edit_payment=None, edit_expense=None, active_v
         payments_resolved=payments_resolved, cycle_key=cycle_key,
         unpaid=groups["unpaid"], deferred=groups["deferred"], paid=groups["paid"],
         unpaid_overdue=unpaid_overdue, unpaid_soon=unpaid_soon, unpaid_pending=unpaid_pending,
+        deferred_overdue=deferred_overdue, deferred_soon=deferred_soon, deferred_later=deferred_later,
         urgency_label_sk=URGENCY_LABEL_SK,
         payment_types=PAYMENT_TYPES, expense_types=EXPENSE_TYPES, freq_label=FREQ_LABEL,
         test_result=test_result, test_amount=test_amount,
@@ -2277,7 +2438,7 @@ def render_page(edit_income=None, edit_payment=None, edit_expense=None, active_v
         onetime_resolved=onetime_resolved, priority_label=PRIORITY_LABEL,
         receipt_review=receipt_review,
         forecast_months=forecast_months,
-        audit_entries=list(reversed(audit_log.load_audit_log(AUDIT_LOG_PATH)))[:30],
+        audit_entries=_with_day_and_time(list(reversed(audit_log.load_audit_log(AUDIT_LOG_PATH)))[:30]),
         audit_action_label=AUDIT_ACTION_LABEL,
         reset_confirm_code=RESET_CONFIRM_CODE,
     )
@@ -2678,6 +2839,18 @@ def onetime_delete(i):
     if i < len(data): data.pop(i)
     save(ONETIME, data)
     return go_home()
+
+@app.get("/receipt/image/<receipt_id>")
+def receipt_image(receipt_id):
+    # receipt_id is always our own uuid4().hex[:12] -- reject anything else
+    # up front rather than letting a crafted id walk the receipts dir.
+    if not re.fullmatch(r"[0-9a-f]{12}", receipt_id):
+        abort(404)
+    for ext in (".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"):
+        candidate = RECEIPTS_DIR / f"{receipt_id}{ext}"
+        if candidate.exists():
+            return send_file(candidate)
+    abort(404)
 
 @app.post("/receipt/upload")
 def receipt_upload():

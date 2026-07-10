@@ -124,6 +124,67 @@ class DeferredDashboardCardTests(AppViewsTestCase):
         self.assertIn("Žiadne odložené platby", html)
 
 
+class DeferredViewTabSplitTests(AppViewsTestCase):
+    """The /deferred view's Po termíne/Čoskoro/Neskôr tabs (visual redesign)
+    split the same deferred list three ways by days_left -- this must never
+    change what counts as deferred, only how it's grouped for display."""
+
+    def test_deferred_to_date_already_passed_is_carried_over_not_left_in_deferred(self):
+        # docs/balance_first_rules.md: once deferred_to's month is the
+        # current cycle's month or earlier, resolve_deferred_carryovers()
+        # promotes the item out of "deferred" into that cycle's unpaid list
+        # -- so it must never still show up on the /deferred tabs, only on
+        # /payments (as an overdue carryover).
+        events = pe.load_payment_events()
+        events = pe.defer_payment_to_date(events, "p1", "2026-06", date(2026, 6, 1))
+        pe.save_payment_events(events)
+
+        deferred_html = self.client.get("/deferred").data.decode()
+        self.assertNotIn("Elektrina", deferred_html)
+
+        payments_html = self.client.get("/payments").data.decode()
+        po_splatnosti = payments_html.split('id="po-splatnosti"')[1].split('id="coskoro"')[0]
+        self.assertIn("Elektrina", po_splatnosti)
+
+    def test_far_future_deferred_item_appears_under_neskor(self):
+        events = pe.load_payment_events()
+        events = pe.defer_payment_to_date(events, "p1", "2026-07", date(2026, 12, 1))
+        pe.save_payment_events(events)
+
+        html = self.client.get("/deferred").data.decode()
+        neskor = html.split('id="d-neskor"')[1]
+        po_terminie = html.split('id="d-po-terminie"')[1].split('id="d-coskoro"')[0]
+        self.assertIn("Elektrina", neskor)
+        self.assertNotIn("Elektrina", po_terminie)
+
+
+class ReceiptImageRouteTests(AppViewsTestCase):
+    def test_valid_receipt_id_serves_the_image_bytes(self):
+        (web.RECEIPTS_DIR / "abc123abc123.jpg").write_bytes(b"fake-jpeg-bytes")
+        response = self.client.get("/receipt/image/abc123abc123")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data, b"fake-jpeg-bytes")
+
+    def test_missing_receipt_id_returns_404(self):
+        response = self.client.get("/receipt/image/doesnotexist1")
+        self.assertEqual(response.status_code, 404)
+
+    def test_non_hex_receipt_id_is_rejected_before_touching_disk(self):
+        response = self.client.get("/receipt/image/..%2f..%2fetc%2fpasswd")
+        self.assertEqual(response.status_code, 404)
+
+
+class HistoryTimelineGroupingTests(AppViewsTestCase):
+    def test_history_groups_entries_by_day_newest_day_first(self):
+        (web.AUDIT_LOG_PATH).write_text(json.dumps([
+            {"at": "2026-07-08T10:00:00", "action": "balance_updated", "detail": "a"},
+            {"at": "2026-07-10T09:00:00", "action": "balance_updated", "detail": "b"},
+            {"at": "2026-07-10T14:30:00", "action": "payment_paid", "detail": "c"},
+        ]))
+        html = self.client.get("/history").data.decode()
+        self.assertLess(html.index("2026-07-10"), html.index("2026-07-08"))
+
+
 class BalanceFirstSummaryDashboardFieldsTests(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.TemporaryDirectory()

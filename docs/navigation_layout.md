@@ -14,9 +14,9 @@ it also works with JavaScript disabled or via curl).
 | route         | active_view  | shows |
 |----------------|--------------|-------|
 | `/`            | `dashboard`  | Hero overview + 4 summary cards only |
-| `/payments`    | `payments`   | Po splatnosti / Splatné čoskoro / Čaká na potvrdenie / Zaplatené, full payment management table, jednorazové platby, dlhy |
-| `/deferred`    | `deferred`   | Full deferred list with origin cycle, days remaining, zmeniť dátum |
-| `/envelopes`   | `envelopes`  | Full envelope-grid progress cards + collapsed management table |
+| `/payments`    | `payments`   | Po splatnosti / Čoskoro / Čaká / Zaplatené as filter-pill tabs over task-cards (see `docs/visual_design.md`), jednorazové platby, dlhy |
+| `/deferred`    | `deferred`   | Summary header + Po termíne/Čoskoro/Neskôr tabs over the same deferred task-cards, origin cycle, days remaining, zmeniť dátum |
+| `/envelopes`   | `envelopes`  | Full envelope-grid progress cards (icon circle per category) + collapsed management table |
 | `/expenses`    | `expenses`   | Expense entry forms + expenses table |
 | `/receipts`    | `receipts`   | OCR upload + review flow (this route didn't exist before this slice — the quick-action link was 404ing) |
 | `/history`     | `history`    | Full audit log + technical output |
