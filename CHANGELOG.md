@@ -2,7 +2,52 @@
 
 Human-readable summary of the project's major changes. All dates 2026-07-09
 (the revival happened in a single day's work session, building on an older,
-previously non-git-tracked local project).
+previously non-git-tracked local project) except where noted.
+
+## `a76f595` — Add debts and one-time obligations UI, wired into the forecast (2026-07-10)
+
+Debts: `obligations.set_debt_state()` (new) validates state transitions per
+direction (I_owe: pending/paid_me/deferred; owed_to_me: pending/received —
+mixing them is rejected). Web dashboard gets a "Dlhy" section; pending
+I_owe debts feed into `calc_month()`'s forecast via the existing
+`debt_to_payment()`, reducing `safe_to_spend_now` exactly like any other
+obligation. owed_to_me debts never enter the forecast, per that function's
+existing rule. One-time obligations: `generate_onetime_for_month()`
+(existing pure helper) now merges into `payment_items`, so a one-time item
+gets the full 5-state `payment_events` lifecycle exactly like a recurring
+payment. Web dashboard gets a "Jednorazové platby" section, scoped to the
+current month. 135 tests total.
+
+## `22de605` — Add spending envelopes (categories vs. monthly budget) (2026-07-10)
+
+New `envelopes.py`: pure per-category monthly-limit tracking (spent,
+remaining, over_budget) plus a 3-month historical average. Wired into the
+web dashboard as an "Obálky" section. Categories reuse the existing
+`EXPENSE_TYPES` list, so `expense.name` is the category with no new field
+needed. 115 tests total.
+
+## `44f96bd` — Fix safe-to-spend mixing future income into current cash position (2026-07-10)
+
+The dashboard's "Bezpečne minúť" figure was computed from `real_available`,
+which added future income (e.g. an upcoming payday) before subtracting
+required payments and reserve — a real shortfall before payday could
+render as a safe-looking positive number. Added
+`forecast.current_cash_position()`: `safe_to_spend_now` from the current
+balance only (never inflated by future income, floored at 0), separate
+from `projected_after_payday` (may include future income, labeled as a
+projection). 98 tests total.
+
+## `6a90742` — Fix recurring payment state to be cycle-scoped, reorganize mobile dashboard
+
+Added `payment_events.py`: state (`paid_me`/`paid_other`/`paid_reserve`/
+`deferred`) is no longer baked onto recurring templates in
+`data/payments.json` (which made a payment marked paid in July stay paid
+forever) — instead it lives in `data/payment_events.json`, one event per
+`(payment_id, cycle_key)`. No event for a cycle means pending, regardless
+of what the template's legacy state field says. Reorganized the dashboard
+so the cashflow summary renders above the income/settings tables, added a
+sticky nav bar, and moved main content ahead of the sidebar on mobile.
+87 tests total.
 
 ## Unreleased — documentation and public-release cleanup
 
