@@ -534,6 +534,11 @@ button.tiny.defer-quick{padding:6px 9px;font-size:11px;border-radius:999px;backg
 .deferred-detail-row.overdue{border-color:rgba(239,68,68,.7);background:rgba(127,29,29,.22)}
 .deferred-detail-head{display:flex;justify-content:space-between;gap:10px;font-weight:800;margin-bottom:4px}
 .deferred-detail-row .pay-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.edit-target-flash{animation:bp-edit-flash 2.2s ease-out}
+@keyframes bp-edit-flash{
+  0%{box-shadow:0 0 0 3px rgba(37,99,235,.9);border-color:rgba(96,165,250,.9)}
+  100%{box-shadow:0 0 0 0 rgba(37,99,235,0)}
+}
 .envelope-edit-row{
   display:grid;
   grid-template-columns:1fr 1fr;
@@ -718,7 +723,10 @@ button.tiny.defer-quick{padding:6px 9px;font-size:11px;border-radius:999px;backg
 </table>
 </div>
 {% endmacro %}
-<script>window.BP_ACTIVE_VIEW = "{{active_view}}";</script>
+<script>
+window.BP_ACTIVE_VIEW = "{{active_view}}";
+window.BP_EDIT_TARGET = "{% if edit_payment is not none %}edit-form-payment{% elif edit_income is not none %}edit-form-income{% elif edit_expense is not none %}edit-form-expense{% endif %}";
+</script>
 <nav class="topnav" id="appDrawer">
 <span class="brand">BudgetPilot</span>
 <a href="/" class="{% if active_view=='dashboard' %}active{% endif %}">Prehľad</a>
@@ -767,7 +775,7 @@ button.tiny.defer-quick{padding:6px 9px;font-size:11px;border-radius:999px;backg
 </form>
 </div>
 
-<div class="card">
+<div class="card" id="edit-form-income">
 <h2>{% if edit_income is not none %}Upraviť príjem{% else %}Príjem{% endif %}</h2>
 <form method="post" action="{% if edit_income is not none %}/income/update/{{edit_income}}{% else %}/income/add{% endif %}">
 <label>Názov</label><input name="name" value="{{income_form.get('name','Výplata netto')}}">
@@ -782,7 +790,7 @@ button.tiny.defer-quick{padding:6px 9px;font-size:11px;border-radius:999px;backg
 {% endif %}
 
 {% if active_view == 'payments' %}
-<div class="card">
+<div class="card" id="edit-form-payment">
 <h2>{% if edit_payment is not none %}Upraviť platbu{% else %}Pravidelná platba{% endif %}</h2>
 <form method="post" action="{% if edit_payment is not none %}/payment/update/{{edit_payment}}{% else %}/payment/add{% endif %}">
 <label>Typ</label>
@@ -847,7 +855,7 @@ button.tiny.defer-quick{padding:6px 9px;font-size:11px;border-radius:999px;backg
 </form>
 </div>
 
-<div class="card">
+<div class="card" id="edit-form-expense">
 <h2>{% if edit_expense is not none %}Upraviť výdavok{% else %}Detailný výdavok{% endif %}</h2>
 <form method="post" action="{% if edit_expense is not none %}/expense/update/{{edit_expense}}{% else %}/expense/add{% endif %}">
 <label>Typ (obálka)</label>
@@ -2011,6 +2019,26 @@ button.tiny.defer-quick{padding:6px 9px;font-size:11px;border-radius:999px;backg
       e.preventDefault();
       if(input) input.reportValidity();
     }
+  });
+})();
+</script>
+
+<script>
+/* BP_EDIT_FORM_SCROLL_V1: the edit form for an income/payment/expense
+   lives in the sidebar, which on mobile renders BELOW all the main
+   content (.sidebar{order:2}) -- clicking "Upraviť" otherwise looks
+   like nothing happened. Scroll it into view and flash a highlight so
+   it's obvious where to look, on both desktop and mobile. */
+(function(){
+  function ready(fn){ if(document.readyState !== "loading") fn(); else document.addEventListener("DOMContentLoaded", fn); }
+  ready(function(){
+    var id = window.BP_EDIT_TARGET;
+    if(!id) return;
+    var el = document.getElementById(id);
+    if(!el) return;
+    el.scrollIntoView({behavior:"smooth", block:"start"});
+    el.classList.add("edit-target-flash");
+    setTimeout(function(){ el.classList.remove("edit-target-flash"); }, 2200);
   });
 })();
 </script>
