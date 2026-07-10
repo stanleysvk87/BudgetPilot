@@ -6,8 +6,10 @@ __pycache__/
 venv/
 .env
 
-# local-only data override (not currently used, reserved)
-data/*.local.json
+# local runtime data (may contain real household data)
+data/*.json
+data/receipts/
+!data/.gitkeep
 
 # local backups (may contain real household data once in real use)
 backups/

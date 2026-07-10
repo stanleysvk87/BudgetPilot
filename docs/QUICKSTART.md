@@ -10,8 +10,16 @@ python3 budgetpilot_web.py
 ```
 
 Open `http://localhost:8765` in your browser. That's it — BudgetPilot ships
-with small demo data in `data/*.json` so the dashboard has something to
-show immediately.
+with a first-run setup flow for entering your own balance and recurring
+payments.
+
+To try the fake demo data instead:
+
+```bash
+mkdir -p data
+cp data.example/*.json data/
+python3 budgetpilot_web.py
+```
 
 To use the CLI instead of (or alongside) the web UI:
 

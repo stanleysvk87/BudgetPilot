@@ -1,0 +1,11 @@
+[
+  {
+    "id": "income-salary",
+    "name": "Výplata",
+    "amount": 2000.0,
+    "day": 15,
+    "frequency": "monthly",
+    "start": "2026-01-01",
+    "active": true
+  }
+]

@@ -58,9 +58,8 @@ by `tests/test_forecast.py`.
 
 ## Web UI actions → payment states
 
-The payments table in `budgetpilot_web.py` exposes a state selector per
-payment (`POST /payment/state/<i>`) plus a dedicated "Odložiť o 7 dní"
-button (`POST /payment/defer/<i>`). Both write to
+The payments table in `budgetpilot_web.py` exposes state actions per
+payment and a deferred-date form. State changes write to
 `data/payment_events.json` for the **current cycle only** — they never
 touch the template in `data/payments.json`:
 
@@ -70,7 +69,7 @@ touch the template in `data/payments.json`:
 | Zaplatené z účtu                | `paid_me`                         |
 | Zaplatil niekto iný              | `paid_other`                      |
 | Zaplatené z rezervy              | `paid_reserve`                    |
-| Odložiť o 7 dní                 | `deferred`, `payment_events.defer_payment_event()` |
+| Odložiť                         | `deferred`, with an explicit `deferred_to` date |
 
 `payment_events.set_payment_event()` creates or replaces the event for
 that `(payment_id, cycle_key)` pair only — every other cycle's event, and
@@ -85,22 +84,19 @@ and remain useful for one-time template-level edits/migration, but the
 web UI no longer calls them for state changes, since that would be the
 permanent-template bug this model fixes.
 
-**Known limitation:** there is no per-cycle due-date override yet, so
-"Odložiť" always adds a flat 7 days rather than letting you pick an
-arbitrary new date, and a deferral cannot yet be scheduled into a future
-cycle — it is always scoped to the current cycle. If the new date lands
-after the next payday, `forecast()` correctly drops it out of the
-*current* forecast window (see
+Deferring always requires a concrete target date in the UI. If the new
+date lands after the next payday, `forecast()` correctly drops it out of
+the *current* forecast window (see
 `test_deferred_past_horizon_excluded_from_current_window`) — it simply
 becomes a concern for the next cycle instead.
 
 ## Demo/default data
 
-`data/payments.json` ships with a small, fake, internally-consistent
-household set of recurring templates (mortgage, electricity, internet,
-car insurance, kindergarten, a subscription, a loan installment) sized so
-the forecast numbers can be checked by hand. `data/payment_events.json`
-holds the current demo cycle's (`2026-07`) state for those templates —
+`data.example/payments.json` ships with a small, fake,
+internally-consistent household set of recurring templates (mortgage,
+electricity, internet, car insurance, kindergarten, a subscription, a loan
+installment) sized so the forecast numbers can be checked by hand.
+`data.example/payment_events.json` holds the demo cycle's (`2026-07`) state for those templates —
 electricity paid from the account, internet paid by someone else, car
 insurance paid from the reserve, kindergarten deferred a few days. None
 of that is baked onto the templates themselves, so simulating a later
@@ -108,12 +104,9 @@ month (`python3 budgetpilot.py`'s 18-month simulation, or the CLI/web
 dashboard once the system date moves past July 2026) correctly shows
 every payment back to `pending` until a new event exists for that cycle.
 This is **not** real financial data — replace it with your own
-household's numbers whenever you're ready. Whatever was in `data/`
-before this reset was backed up to `backups/data-reset-<timestamp>/`
-first, and whatever was there before the payment-events migration was
-backed up to `backups/data-payment-events-<timestamp>/`; neither backup
-is required for anything to keep working.
+household's numbers whenever you're ready. Runtime `data/*.json` files are
+ignored by git and are not used by the test suite.
 
-No bank integration, OCR, AI, or cloud sync is included anywhere in this
-project — payments and expenses are entered by hand, and `receipts.py`
-remains an unused extension point (see `docs/receipt_ocr.md`).
+No bank integration, AI, or cloud sync is included anywhere in this project.
+Receipt OCR is optional, local/offline, and always requires manual review
+before saving an expense.

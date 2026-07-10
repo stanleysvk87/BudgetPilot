@@ -1,8 +1,10 @@
 # Data model
 
-All data lives in plain JSON files under `data/`. There is no database.
+Runtime data lives in plain JSON files under `data/`. There is no database.
 Nothing here is a bank format — every file is written and read only by
-this codebase, in whatever shape it already understands.
+this codebase, in whatever shape it already understands. `data/*.json` is
+ignored by git; fake demo data lives in `data.example/` and test fixtures
+live in `tests/fixtures/demo_data/`.
 
 ## `data/settings.json`
 
@@ -44,9 +46,7 @@ backward compatible:
   "start_month": "2026-01",
   "priority": "mandatory",
   "flexibility": "hard_due",
-  "active": true,
-  "state": "pending",
-  "paid": false
+  "active": true
 }
 ```
 
@@ -56,10 +56,9 @@ backward compatible:
 - `flexibility` — `hard_due` / `can_defer` / `optional`.
 - `active` / `cancelled_from_month` — whether a recurring obligation still
   applies; cancelling sets one of these instead of deleting the entry.
-- `state` — one of the five payment states (see
-  [CASHFLOW_LOGIC.md](CASHFLOW_LOGIC.md)). Legacy entries have no `state`
-  and fall back to the `paid` boolean (`true` → `paid_me`, else `pending`).
-- `deferred_to` — present only when `state` is `deferred`.
+- Payment state is cycle-scoped in `data/payment_events.json`; recurring
+  templates should not carry permanent `state`/`paid` values. Legacy entries
+  with those fields still parse for compatibility.
 
 Recurring obligations added via `/setup` are written into this same file
 (not a separate one) with the full field set above, so the original
@@ -82,9 +81,8 @@ Manual one-off spending log:
 }
 ```
 
-- `source` — `manual` / `ocr` / `import`, defaults to `manual`. `ocr` is
-  reserved for a future feature and never set by anything today — see
-  [receipt_ocr.md](receipt_ocr.md).
+- `source` — `manual` / `ocr` / `import`, defaults to `manual`. OCR entries
+  are created only after user review — see [receipt_ocr.md](receipt_ocr.md).
 - Optional receipt metadata fields (`receipt_id`, `merchant`,
   `original_image_path`, `ocr_confidence`, `ocr_raw_text`, `needs_review`)
   are supported by the data model but unused until OCR exists.
@@ -96,15 +94,13 @@ payday balance snapshots: date, real balance, reserve, optional note. The
 most recent snapshot is always preferred over `settings.json` when
 resolving the current balance — see `obligations.resolve_account_balance()`.
 
-## Categories / envelopes (not yet implemented)
+## `data/envelopes.json`
 
-Planned monthly spending categories (food, fuel, children, pharmacy,
-household, car, school, subscriptions, restaurant, other) with a budget
-envelope per category are designed but not built — see
-[ROADMAP.md](ROADMAP.md). No fields for this exist in `data/expenses.json`
-yet.
+Monthly category limits. Each envelope has a category/name and a monthly
+limit; current spending is calculated from `data/expenses.json` for the
+open month.
 
-## Debts (pure helpers only, no UI yet)
+## `data/debts.json`
 
 `obligations.py` has a `debt_to_payment()` helper that converts an `I_owe`
 debt into a normal pending payment. Money marked `owed_to_me` is never

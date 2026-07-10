@@ -16,9 +16,10 @@ import envelopes as env
 import budgetpilot as bp
 import audit_log
 from forecast import payment_state, PENDING, PAID_ME, PAID_OTHER, PAID_RESERVE, DEFERRED
+from paths import app_base, data_dir
 
-BASE = Path.home() / "BudgetPilot"
-DATA = BASE / "data"
+BASE = app_base()
+DATA = data_dir()
 SETTINGS = DATA / "settings.json"
 INCOMES = DATA / "incomes.json"
 PAYMENTS = DATA / "payments.json"
@@ -75,7 +76,12 @@ from envelope_editor import register_envelope_editor
 register_envelope_editor(app)
 
 from first_run_wizard import register_first_run_wizard
-register_first_run_wizard(app)
+register_first_run_wizard(
+    app,
+    data_path=lambda: DATA,
+    settings_path=lambda: SETTINGS,
+    payments_path=lambda: PAYMENTS,
+)
 
 PAYMENT_TYPES = ["Hypotéka","Nájom","Elektrina","Voda","Plyn","Internet","Paušál","PZP","Havarijná poistka","STK","Olej + filtre","Diaľničná známka","Iné"]
 EXPENSE_TYPES = ["Rýchly výdavok","Potraviny","Nafta","Večera","Deti","Lekáreň","Oblečenie","Domácnosť","Iné"]

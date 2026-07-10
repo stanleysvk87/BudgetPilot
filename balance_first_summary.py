@@ -5,14 +5,14 @@ import calendar
 import json
 import re
 from datetime import date, datetime, timedelta
-from pathlib import Path
 
 from flask import jsonify, redirect, request
 
 import audit_log
+from paths import app_base, data_dir
 
-BASE = Path(__file__).resolve().parent
-DATA = BASE / "data"
+BASE = app_base()
+DATA = data_dir()
 AUDIT_LOG_PATH = DATA / "audit_log.json"
 
 PAID_STATES = {"paid", "paid_me", "paid_other", "paid_reserve"}

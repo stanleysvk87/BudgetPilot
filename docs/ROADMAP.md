@@ -21,8 +21,9 @@
 - Receipt OCR — photo upload, local/offline Tesseract extraction (amount/
   date/merchant guess), mandatory user review/confirm before saving as a
   normal expense. See [receipt_ocr.md](receipt_ocr.md)
-- 58 unit tests (stdlib `unittest`), covering forecast, obligations, and
-  the receipts placeholder
+- 230 unit tests (stdlib `unittest`), covering forecast, obligations,
+  receipt OCR/review boundaries, reset/wizard behavior, app views, and
+  data fixtures
 - Mobile-friendly dashboard (viewport meta tag, horizontal table scroll),
   reachable over LAN
 - Orange Pi / systemd deployment — user-level service (no root needed),

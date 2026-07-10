@@ -19,15 +19,13 @@ BudgetPilot is designed to be local-first:
 None of this is transmitted anywhere by BudgetPilot. It only ever reads and
 writes these files on local disk.
 
-## The data shipped in this repository
+## Demo data in this repository
 
-`data/*.json` in this repository ships with small, fake, internally
-consistent demo numbers (a demo mortgage, electricity bill, internet,
-insurance, a subscription, a loan installment) — not real financial data
-from any household. It exists so the app has something to show immediately
-after cloning. Replace it with your own numbers once you're ready to use
-BudgetPilot for real, either by hand-editing the JSON or through the web
-UI's forms.
+Live `data/*.json` files are runtime state and are ignored by git because
+they may contain real household finances. Fake, internally consistent demo
+numbers live in `data.example/` and in `tests/fixtures/demo_data/` for the
+test suite. Copy `data.example/*.json` into `data/` only when you want a
+throwaway demo state.
 
 ## Your responsibility
 
@@ -35,9 +33,8 @@ Because everything is local, **you** are responsible for protecting these
 files the same way you'd protect any other file containing financial
 information:
 
-- Don't commit your real `data/*.json` to a public git repository. If you
-  fork or clone this project for your own use, keep your real data files
-  out of version control (see `.gitignore`) or in a private repository.
+- Don't commit your real `data/*.json` to a public git repository. They are
+  ignored by default, but check `git status` before publishing changes.
 - `backups/` (created by `rollback_latest.sh`) can contain older copies of
   your real data — it's gitignored by default for the same reason.
 - If you back up your data elsewhere (external drive, personal cloud

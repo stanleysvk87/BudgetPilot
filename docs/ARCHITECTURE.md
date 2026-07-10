@@ -25,13 +25,16 @@ obligations.py       Pure helpers for the monthly cycle: recurring
                     resolution, first-run needs_setup() check. Covered by
                     tests/test_obligations.py.
 
-receipts.py          Placeholder-only OCR extension point. No OCR engine,
-                    no image reading, not called from anywhere yet.
-                    Covered by tests/test_receipts.py (asserts it stays
-                    inert).
+receipts.py          Optional local/offline receipt OCR boundary. Uses
+                    Tesseract through pytesseract when available, falls
+                    back inertly when unavailable, and never saves an
+                    OCR result without user review.
 
 data/                JSON data files (settings, payments, incomes,
-                    expenses, snapshots). No database.
+                    expenses, snapshots). Runtime state, ignored by git.
+
+data.example/        Fake demo/example JSON files that can be copied into
+                    data/ for a throwaway demo state.
 
 tests/               Standard-library unittest, no pytest or other test
                     framework dependency.

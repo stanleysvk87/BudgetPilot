@@ -1,0 +1,31 @@
+[
+  {
+    "payment_id": "pay-elektrina",
+    "cycle_key": "2026-07",
+    "state": "paid_me",
+    "created_at": "2026-07-09T09:00:00",
+    "updated_at": "2026-07-09T09:00:00"
+  },
+  {
+    "payment_id": "pay-internet",
+    "cycle_key": "2026-07",
+    "state": "paid_other",
+    "created_at": "2026-07-09T09:00:00",
+    "updated_at": "2026-07-09T09:00:00"
+  },
+  {
+    "payment_id": "pay-poistka",
+    "cycle_key": "2026-07",
+    "state": "paid_reserve",
+    "created_at": "2026-07-09T09:00:00",
+    "updated_at": "2026-07-09T09:00:00"
+  },
+  {
+    "payment_id": "pay-skolka",
+    "cycle_key": "2026-07",
+    "state": "deferred",
+    "deferred_to": "2026-07-14",
+    "created_at": "2026-07-09T09:00:00",
+    "updated_at": "2026-07-09T09:00:00"
+  }
+]

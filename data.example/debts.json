@@ -1,0 +1,10 @@
+[
+  {
+    "id": "debt-jana",
+    "name": "Jana",
+    "amount": 500.0,
+    "direction": "owed_to_me",
+    "due_date": "2026-07-20",
+    "state": "pending"
+  }
+]

@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 import json
 import sys
-from pathlib import Path
 from datetime import date
 import calendar
 
 from forecast import forecast as run_forecast, payment_state, current_cash_position
 from obligations import month_key, debt_to_payment, generate_onetime_for_month
 from payment_events import load_payment_events, apply_payment_events
+from paths import app_base, data_dir
 
-BASE = Path.home() / "BudgetPilot"
-DATA = BASE / "data"
+BASE = app_base()
+DATA = data_dir()
 SETTINGS = DATA / "settings.json"
 INCOMES = DATA / "incomes.json"
 PAYMENTS = DATA / "payments.json"

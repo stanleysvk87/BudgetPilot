@@ -1,0 +1,14 @@
+[
+  {
+    "name": "Nafta",
+    "amount": 45.0,
+    "date": "2026-07-09",
+    "source": "manual"
+  },
+  {
+    "name": "Potraviny",
+    "amount": 60.0,
+    "date": "2026-07-09",
+    "source": "manual"
+  }
+]

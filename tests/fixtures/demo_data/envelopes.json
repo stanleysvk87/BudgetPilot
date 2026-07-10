@@ -1,0 +1,17 @@
+[
+  {
+    "id": "env-potraviny",
+    "category": "Potraviny",
+    "monthly_limit": 300.0
+  },
+  {
+    "id": "env-nafta",
+    "category": "Nafta",
+    "monthly_limit": 200.0
+  },
+  {
+    "id": "env-deti",
+    "category": "Deti",
+    "monthly_limit": 150.0
+  }
+]

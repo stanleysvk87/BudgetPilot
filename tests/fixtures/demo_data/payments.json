@@ -1,0 +1,93 @@
+[
+  {
+    "id": "pay-hypoteka",
+    "name": "Hypotéka",
+    "amount": 750.0,
+    "day": 10,
+    "due_day": 10,
+    "frequency": "monthly",
+    "start": "2026-01-01",
+    "start_month": "2026-01",
+    "priority": "mandatory",
+    "flexibility": "hard_due",
+    "active": true
+  },
+  {
+    "id": "pay-elektrina",
+    "name": "Elektrina",
+    "amount": 95.0,
+    "day": 11,
+    "due_day": 11,
+    "frequency": "monthly",
+    "start": "2026-01-01",
+    "start_month": "2026-01",
+    "priority": "mandatory",
+    "flexibility": "hard_due",
+    "active": true
+  },
+  {
+    "id": "pay-internet",
+    "name": "Internet",
+    "amount": 25.0,
+    "day": 12,
+    "due_day": 12,
+    "frequency": "monthly",
+    "start": "2026-01-01",
+    "start_month": "2026-01",
+    "priority": "important",
+    "flexibility": "hard_due",
+    "active": true
+  },
+  {
+    "id": "pay-poistka",
+    "name": "Poistka",
+    "amount": 28.0,
+    "day": 13,
+    "due_day": 13,
+    "frequency": "monthly",
+    "start": "2026-01-01",
+    "start_month": "2026-01",
+    "priority": "important",
+    "flexibility": "hard_due",
+    "active": true
+  },
+  {
+    "id": "pay-predplatne",
+    "name": "Predplatné",
+    "amount": 12.0,
+    "day": 14,
+    "due_day": 14,
+    "frequency": "monthly",
+    "start": "2026-01-01",
+    "start_month": "2026-01",
+    "priority": "optional",
+    "flexibility": "can_defer",
+    "active": true
+  },
+  {
+    "id": "pay-pozicka",
+    "name": "Splátka pôžičky",
+    "amount": 150.0,
+    "day": 14,
+    "due_day": 14,
+    "frequency": "monthly",
+    "start": "2026-01-01",
+    "start_month": "2026-01",
+    "priority": "mandatory",
+    "flexibility": "hard_due",
+    "active": true
+  },
+  {
+    "id": "pay-skolka",
+    "name": "Škôlka",
+    "amount": 120.0,
+    "day": 14,
+    "due_day": 14,
+    "frequency": "monthly",
+    "start": "2026-01-01",
+    "start_month": "2026-01",
+    "priority": "important",
+    "flexibility": "can_defer",
+    "active": true
+  }
+]

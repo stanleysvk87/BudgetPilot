@@ -1,24 +1,12 @@
-
-# BP_SKIP_RUNTIME_DEMO_TESTS_V1
-# These tests were originally written against bundled fake demo data.
-# Real household runtime data intentionally changes after first-run setup.
-# If data/settings.json is marked real_runtime, skip this demo-only test file.
-import json as _bp_json
-from pathlib import Path as _bp_Path
-try:
-    _bp_settings = _bp_json.loads((_bp_Path(__file__).resolve().parents[1] / "data" / "settings.json").read_text(encoding="utf-8"))
-except Exception:
-    _bp_settings = {}
-if _bp_settings.get("data_profile") == "real_runtime":
-    import unittest as _bp_unittest
-    raise _bp_unittest.SkipTest("Skipping demo-data tests because data/ contains real runtime household data.")
-
 #!/usr/bin/env python3
-"""Sanity checks for the clean demo/default dataset in data/*.json.
+"""Sanity checks for the clean demo/default dataset fixture.
 
-These pin the forecast to the fixed demo cycle the data was written for
+These pin the forecast to the fixed demo cycle the fixture was written for
 (today = 2026-07-09, payday = 2026-07-15). If the demo data is ever
 reset again, update these dates alongside it.
+
+The live data/*.json directory is runtime household state and must not be
+used as a test fixture.
 
 Run directly: python3 tests/test_demo_data.py
 Or with unittest: python3 -m unittest discover -s tests
@@ -37,7 +25,7 @@ import obligations as ob
 import envelopes as env
 from payment_events import apply_payment_events
 
-DATA = ROOT / "data"
+DATA = ROOT / "tests" / "fixtures" / "demo_data"
 TODAY = date(2026, 7, 9)
 NEXT_INCOME = date(2026, 7, 15)
 CYCLE_KEY = "2026-07"

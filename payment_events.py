@@ -18,12 +18,12 @@ reshaping this module.
 """
 import json
 from datetime import date, datetime, timedelta
-from pathlib import Path
 
 from forecast import PENDING, PAID_ME, DEFERRED, VALID_STATES
 from obligations import month_key
+from paths import data_dir
 
-DATA = Path.home() / "BudgetPilot" / "data"
+DATA = data_dir()
 PAYMENT_EVENTS = DATA / "payment_events.json"
 
 OVERDUE = "overdue"

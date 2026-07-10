@@ -25,9 +25,9 @@ tracks what's still coming:
 - **Not AI-powered.** No LLM, no "smart" categorization.
 - **Not a cloud service.** No account, no server other than the one you run
   yourself, no data leaves your machine.
-- **No OCR yet.** Receipt-photo scanning is a documented future idea only —
-  see [`docs/receipt_ocr.md`](docs/receipt_ocr.md). Nothing reads images
-  today.
+- **Receipt OCR is local/offline and optional.** Photo upload uses
+  Tesseract when installed, then always requires manual review before an
+  expense is saved. See [`docs/receipt_ocr.md`](docs/receipt_ocr.md).
 - **No authentication.** It's built for trusted use on your own LAN, not for
   exposing to the public internet. See [`docs/SECURITY.md`](docs/SECURITY.md).
 
@@ -46,10 +46,10 @@ tracks what's still coming:
 
 ## Current project status
 
-Active MVP under development. The forecast engine and payment-state model
-are implemented and unit-tested. Manual expense categories/envelopes, debts,
-and a multi-month forecast are designed as pure functions but don't have a
-UI yet. See [`docs/ROADMAP.md`](docs/ROADMAP.md) for what's next.
+Active MVP under development. The forecast engine, payment-state model,
+envelopes, debts, receipt review flow, and multi-month forecast are
+implemented and unit-tested. See [`docs/ROADMAP.md`](docs/ROADMAP.md) for
+what's next.
 
 Older Tkinter GUI prototypes (`budgetpilot_gui*.py`) and one-off patch
 scripts (`fix_*.py`) exist from earlier iterations of this project and are
@@ -59,9 +59,10 @@ the Flask web UI.
 ## Local-first philosophy
 
 Your financial data stays in plain JSON files on your own disk
-(`data/*.json`). There is no network call anywhere in this codebase except
-serving the local web UI. You can inspect, back up, or edit the data files
-directly with a text editor.
+(`data/*.json`). Runtime data is ignored by git; demo/example data lives in
+`data.example/` and test fixtures live in `tests/fixtures/`. There is no
+network call anywhere in this codebase except serving the local web UI. You
+can inspect, back up, or edit the data files directly with a text editor.
 
 ## Screenshots
 
@@ -70,14 +71,18 @@ running; add screenshots here once available)*
 
 ## Quick start
 
-Requires Python 3.10+ and Flask (only external dependency, used by the web
-UI).
+Requires Python 3.10+. Flask is needed for the web UI; `pytesseract` and
+Pillow are optional for receipt OCR.
 
 ```bash
 git clone <this-repo>
 cd BudgetPilot
-pip install flask   # only needed for the web UI, not the CLI
+pip install -r requirements.txt
 ```
+
+On a fresh install, BudgetPilot will start at the first-run setup flow. To
+try the fake demo numbers instead, copy `data.example/*.json` into `data/`
+before starting the app.
 
 ### Run the CLI
 
@@ -123,8 +128,9 @@ budgetpilot_web.py      Flask web dashboard + /setup first-run flow
 forecast.py             Pure forecast function + payment-state rules
 obligations.py          Pure helpers: recurring/one-time obligations, debts,
                          account-balance snapshot resolution
-receipts.py              Placeholder-only OCR extension point (unused)
-data/                    Your JSON data files (demo data by default)
+receipts.py              Local OCR parsing + mandatory review helper
+data/                    Your local JSON runtime data (gitignored)
+data.example/            Fake demo/example JSON data you can copy into data/
 backups/                 Local backups made by rollback_latest.sh (gitignored)
 docs/                    Documentation (see below)
 tests/                   Unit tests (stdlib unittest, no extra dependency)
@@ -153,9 +159,9 @@ Deeper technical notes on the current rule set already exist in
 
 ## Safety / privacy notes
 
-- `data/*.json` ships with small, fake, internally-consistent demo numbers —
-  not anyone's real finances. Replace them with your own household's data
-  once you're ready (see [docs/PRIVACY.md](docs/PRIVACY.md)).
+- `data/*.json` is local runtime state and is ignored by git. Fake demo
+  numbers are kept in `data.example/` and `tests/fixtures/demo_data/` (see
+  [docs/PRIVACY.md](docs/PRIVACY.md)).
 - Nothing in this project sends data anywhere. There is no analytics, no
   telemetry, no third-party API call.
 - There is no login. Anyone who can reach the web UI's address (e.g. anyone

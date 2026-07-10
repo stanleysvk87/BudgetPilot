@@ -1,0 +1,10 @@
+{
+  "account_balance": 400.0,
+  "real_balance": 400.0,
+  "use_reserve": true,
+  "reserve_amount": 300.0,
+  "safe_min": 300.0,
+  "payday_day": 15,
+  "setup_complete": true,
+  "data_profile": "demo_fixture"
+}

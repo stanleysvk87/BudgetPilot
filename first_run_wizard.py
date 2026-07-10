@@ -15,10 +15,11 @@ from datetime import date, datetime
 from pathlib import Path
 
 from flask import redirect, render_template_string, request
+from paths import app_base, data_dir
 
 
-BASE = Path(__file__).resolve().parent
-DATA = BASE / "data"
+BASE = app_base()
+DATA = data_dir()
 
 
 def _read_json(path: Path, default):
@@ -50,9 +51,15 @@ def _to_int(value, default=1) -> int:
         return int(default)
 
 
-def _needs_first_run() -> bool:
-    settings = _read_json(DATA / "settings.json", {})
-    payments = _read_json(DATA / "payments.json", [])
+def _resolve_path(value, default: Path) -> Path:
+    if callable(value):
+        value = value()
+    return Path(value) if value is not None else default
+
+
+def _needs_first_run(settings_path=None, payments_path=None) -> bool:
+    settings = _read_json(_resolve_path(settings_path, DATA / "settings.json"), {})
+    payments = _read_json(_resolve_path(payments_path, DATA / "payments.json"), [])
 
     if not isinstance(settings, dict):
         settings = {}
@@ -211,14 +218,14 @@ button{
 """
 
 
-def register_first_run_wizard(app):
+def register_first_run_wizard(app, data_path=None, settings_path=None, payments_path=None):
     @app.before_request
     def _first_run_gate():
         if request.endpoint in {"first_run_setup", "static"}:
             return None
         if request.path.startswith("/static"):
             return None
-        if _needs_first_run():
+        if _needs_first_run(settings_path=settings_path, payments_path=payments_path):
             return redirect("/setup/full")
         return None
 
@@ -229,6 +236,7 @@ def register_first_run_wizard(app):
 
         today = date.today()
         now = datetime.now().isoformat(timespec="seconds")
+        data_root = _resolve_path(data_path, DATA)
 
         balance = _to_float(request.form.get("account_balance"), 0)
         reserve = _to_float(request.form.get("reserve_amount"), 0)
@@ -286,12 +294,12 @@ def register_first_run_wizard(app):
 
             payments.append(item)
 
-        _write_json(DATA / "settings.json", settings)
-        _write_json(DATA / "incomes.json", [])
-        _write_json(DATA / "payments.json", payments)
-        _write_json(DATA / "payment_events.json", [])
-        _write_json(DATA / "expenses.json", [])
-        _write_json(DATA / "snapshots.json", [{
+        _write_json(data_root / "settings.json", settings)
+        _write_json(data_root / "incomes.json", [])
+        _write_json(data_root / "payments.json", payments)
+        _write_json(data_root / "payment_events.json", [])
+        _write_json(data_root / "expenses.json", [])
+        _write_json(data_root / "snapshots.json", [{
             "date": today.isoformat(),
             "real_balance": balance,
             "reserve_amount": reserve,
@@ -299,7 +307,7 @@ def register_first_run_wizard(app):
         }])
 
         for optional_name in ["envelopes.json", "debts.json", "one_time_obligations.json", "receipts.json"]:
-            path = DATA / optional_name
+            path = data_root / optional_name
             if not path.exists():
                 _write_json(path, [])
 
