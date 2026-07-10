@@ -51,10 +51,9 @@ envelopes, debts, receipt review flow, and multi-month forecast are
 implemented and unit-tested. See [`docs/ROADMAP.md`](docs/ROADMAP.md) for
 what's next.
 
-Older Tkinter GUI prototypes (`budgetpilot_gui*.py`) and one-off patch
-scripts (`fix_*.py`) exist from earlier iterations of this project and are
-kept for history; the supported way to use BudgetPilot today is the CLI and
-the Flask web UI.
+Older Tkinter GUI prototypes and one-off patch scripts live in `legacy/`
+for history; the supported way to use BudgetPilot today is the CLI and the
+Flask web UI.
 
 ## Local-first philosophy
 
@@ -131,11 +130,10 @@ obligations.py          Pure helpers: recurring/one-time obligations, debts,
 receipts.py              Local OCR parsing + mandatory review helper
 data/                    Your local JSON runtime data (gitignored)
 data.example/            Fake demo/example JSON data you can copy into data/
-backups/                 Local backups made by rollback_latest.sh (gitignored)
+backups/                 Local data backups (gitignored)
 docs/                    Documentation (see below)
 tests/                   Unit tests (stdlib unittest, no extra dependency)
-budgetpilot_gui*.py      Older Tkinter prototypes, kept for history
-fix_*.py, rollback_latest.sh   One-off historical patch scripts, kept for history
+legacy/                  Older Tkinter prototypes and one-off patch scripts
 ```
 
 ## Documentation

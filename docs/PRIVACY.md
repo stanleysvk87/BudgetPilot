@@ -35,8 +35,8 @@ information:
 
 - Don't commit your real `data/*.json` to a public git repository. They are
   ignored by default, but check `git status` before publishing changes.
-- `backups/` (created by `rollback_latest.sh`) can contain older copies of
-  your real data — it's gitignored by default for the same reason.
+- `backups/` can contain older copies of your real data — it's gitignored by
+  default for the same reason.
 - If you back up your data elsewhere (external drive, personal cloud
   storage you control), treat it with the same care you'd give any backup
   of financial records.

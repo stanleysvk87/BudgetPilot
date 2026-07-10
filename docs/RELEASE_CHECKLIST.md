@@ -77,16 +77,11 @@ numbers from `data.example/`, never live household data.
 
 ## Legacy Files
 
-Before a public release, decide whether to keep or remove historical files:
-
-- `budgetpilot_gui*.py`
-- `add_gui_lists.py`
-- `fix_*.py`
-- `rollback_latest.sh`
-
-They are useful project history, but they are not part of the supported web
-UI/CLI path and some write directly to `~/BudgetPilot`. If kept, they should
-remain clearly documented as historical/unsupported.
+Historical prototypes and one-off patch scripts live under `legacy/`. They
+are useful project history, but they are not part of the supported web UI/CLI
+path and some write directly to `~/BudgetPilot`. Keep them documented as
+historical/unsupported, or remove them from a release branch if you want the
+smallest possible public tree.
 
 ## Security Position
 

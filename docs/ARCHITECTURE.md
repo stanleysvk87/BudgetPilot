@@ -60,10 +60,8 @@ introduced by this documentation pass.
 
 ## Historical files
 
-`budgetpilot_gui.py`, `budgetpilot_gui_v2.py`, `budgetpilot_gui_v3.py`
-(Tkinter prototypes), `add_gui_lists.py`, and the `fix_*.py` /
-`rollback_latest.sh` scripts are earlier, ad-hoc iterations of this project
-kept for history. They are not part of the supported CLI/web-UI
-architecture described above and aren't required to run BudgetPilot today.
-Some of them write directly to `~/BudgetPilot`, so treat them as historical
-reference only, not release tooling.
+`legacy/` contains earlier Tkinter prototypes and one-off patch scripts
+kept for history. They are not part of the supported CLI/web-UI architecture
+described above and aren't required to run BudgetPilot today. Some of them
+write directly to `~/BudgetPilot`, so treat them as historical reference
+only, not release tooling.
