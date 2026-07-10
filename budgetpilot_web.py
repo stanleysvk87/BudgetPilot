@@ -339,6 +339,12 @@ body{background:radial-gradient(circle at top left,#1e3a8a 0,#0f172a 34%,#020617
 }
 .safety-review h2{margin:0 0 4px;font-size:20px}
 .safety-review .hint{color:var(--muted);font-size:13px;margin-bottom:12px;line-height:1.35}
+.safety-review-groups{display:flex;flex-direction:column;gap:14px}
+.safety-review-group-title{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:800;margin-bottom:8px;cursor:default}
+details.safety-review-group summary.safety-review-group-title{cursor:pointer;list-style:none}
+details.safety-review-group summary.safety-review-group-title::-webkit-details-marker{display:none}
+details.safety-review-group summary.safety-review-group-title::before{content:"▸ ";display:inline-block}
+details.safety-review-group[open] summary.safety-review-group-title::before{content:"▾ "}
 .safety-review-list{display:flex;flex-direction:column;gap:8px}
 .safety-review-row{
   display:grid;
@@ -373,6 +379,18 @@ body{background:radial-gradient(circle at top left,#1e3a8a 0,#0f172a 34%,#020617
   color:#fed7aa;
   font-weight:800;
 }
+.safety-review-row.deferred{
+  border-color:rgba(245,158,11,.4);
+  background:rgba(120,53,15,.16);
+  opacity:.9;
+}
+.safety-review-row.paid{
+  border-color:rgba(34,197,94,.4);
+  background:rgba(20,83,45,.18);
+  opacity:.85;
+}
+.safety-review-row .badge.warn{background:rgba(120,53,15,.6);color:#fed7aa}
+.safety-review-row .badge.ok{background:rgba(20,83,45,.6);color:#bbf7d0}
 .safety-review-x{
   width:34px;
   height:34px;
@@ -445,16 +463,32 @@ body{background:radial-gradient(circle at top left,#1e3a8a 0,#0f172a 34%,#020617
 }
 .editable-envelopes h2{margin:0 0 4px;font-size:20px}
 .editable-envelopes .hint{color:var(--muted);font-size:13px;margin-bottom:12px;line-height:1.35}
+.envelope-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px}
+.envelope-card{border:1px solid rgba(148,163,184,.18);background:rgba(2,6,23,.46);border-radius:16px;padding:14px}
+.envelope-card.warn{border-color:rgba(245,158,11,.6)}
+.envelope-card.over{border-color:rgba(239,68,68,.75);background:rgba(127,29,29,.22)}
+.envelope-card-head{display:flex;justify-content:space-between;align-items:baseline;gap:8px;font-weight:850}
+.envelope-card-name{font-size:16px}
+.envelope-card-remaining{font-size:13px;color:#5eead4;white-space:nowrap}
+.envelope-card.warn .envelope-card-remaining{color:#fbbf24}
+.envelope-card.over .envelope-card-remaining{color:#fca5a5}
+.envelope-progress-bar{height:9px;border-radius:999px;background:rgba(2,6,23,.6);overflow:hidden;margin-top:9px}
+.envelope-progress-fill{height:100%;background:#2dd4bf;border-radius:999px}
+.envelope-progress-fill.warn{background:#fbbf24}
+.envelope-progress-fill.over{background:#ef4444}
+.envelope-card-sub{margin-top:8px;font-size:12px;color:var(--muted)}
+.envelope-card-over{margin-top:6px;font-size:12px;font-weight:800;color:#fca5a5}
+.envelope-card-actions{display:flex;gap:8px;margin-top:10px}
+.envelope-card-btn{flex:1;text-align:center;padding:9px 10px;border-radius:12px;background:#0f766e;color:white;text-decoration:none;font-size:13px;font-weight:750;border:0;cursor:pointer}
+.envelope-card-btn.secondary{background:rgba(148,163,184,.18);color:#e2e8f0}
 .envelope-edit-row{
   display:grid;
-  grid-template-columns:1fr 160px 110px;
+  grid-template-columns:1fr 1fr;
   align-items:end;
   gap:10px;
-  padding:10px 12px;
-  margin-bottom:8px;
-  border:1px solid rgba(148,163,184,.16);
-  background:rgba(2,6,23,.46);
-  border-radius:14px
+  padding:10px 0 0;
+  margin-top:10px;
+  border-top:1px solid rgba(148,163,184,.16);
 }
 .envelope-edit-row label{
   display:block;
@@ -474,7 +508,7 @@ body{background:radial-gradient(circle at top left,#1e3a8a 0,#0f172a 34%,#020617
 }
 @media(max-width:760px){
   .editable-envelopes{border-radius:18px;padding:14px}
-  .envelope-edit-row{grid-template-columns:1fr}
+  .envelope-grid{grid-template-columns:1fr}
 }
 
 
@@ -536,14 +570,23 @@ body{background:radial-gradient(circle at top left,#1e3a8a 0,#0f172a 34%,#020617
 .real-top-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
 .real-top-btn{display:inline-flex;align-items:center;justify-content:center;border-radius:999px;padding:10px 13px;font-size:13px;font-weight:850;color:white;background:#2563eb;border:1px solid rgba(255,255,255,.14);text-decoration:none}
 .real-top-btn.ocr{background:#7c3aed}.real-top-btn.env{background:#0f766e}
-.real-warning{display:none;margin:0 0 12px;padding:11px 13px;border-radius:14px;background:rgba(127,29,29,.55);border:1px solid rgba(248,113,113,.62);color:#fee2e2;font-weight:850}
-.real-warning.show{display:block}
-.real-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:12px}
+.real-hero{text-align:center;padding:18px 10px 6px;margin-bottom:8px}
+.real-hero-value{font-size:52px;font-weight:950;line-height:1;letter-spacing:-.02em}
+.real-hero-value.good{color:#86efac}.real-hero-value.warn{color:#fbbf24}.real-hero-value.bad{color:#fca5a5}
+.real-hero-caption{margin-top:10px;font-size:14px;font-weight:750;line-height:1.4}
+.real-hero-caption.ok{color:#bfdbfe}
+.real-hero-caption.bad{color:#fecaca;background:rgba(127,29,29,.4);border:1px solid rgba(248,113,113,.5);border-radius:14px;padding:9px 14px;display:inline-block}
+.real-sub-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:12px}
 .real-metric{background:rgba(2,6,23,.43);border:1px solid rgba(148,163,184,.18);border-radius:16px;padding:12px}
 .real-label{color:#cbd5e1;font-size:12px;line-height:1.25}
-.real-value{margin-top:5px;font-size:25px;font-weight:950;white-space:nowrap}
-.real-value.good{color:#86efac}.real-value.warn{color:#fbbf24}.real-value.bad{color:#fecaca}
-.real-calc{display:grid;grid-template-columns:1fr auto;gap:8px 12px;background:rgba(2,6,23,.35);border:1px solid rgba(148,163,184,.16);border-radius:16px;padding:12px;margin-bottom:12px}
+.real-value{margin-top:5px;font-size:21px;font-weight:900;white-space:nowrap}
+.real-value.good{color:#86efac}.real-value.warn{color:#fbbf24}.real-value.bad{color:#fecaca}.real-value.teal{color:#5eead4}
+.real-formula{margin-bottom:12px}
+.real-formula summary{cursor:pointer;color:#cbd5e1;font-size:12px;font-weight:700;list-style:none;margin-bottom:8px}
+.real-formula summary::-webkit-details-marker{display:none}
+.real-formula summary::before{content:"▸ ";display:inline-block}
+.real-formula[open] summary::before{content:"▾ "}
+.real-calc{display:grid;grid-template-columns:1fr auto;gap:8px 12px;background:rgba(2,6,23,.35);border:1px solid rgba(148,163,184,.16);border-radius:16px;padding:12px}
 .real-calc .amount{text-align:right;font-weight:950}
 .real-calc .total{border-top:1px solid rgba(148,163,184,.20);padding-top:8px;font-weight:950;font-size:16px}
 .real-update{display:grid;grid-template-columns:1fr 170px 120px;gap:8px;align-items:end;margin-bottom:10px}
@@ -553,14 +596,17 @@ body{background:radial-gradient(circle at top left,#1e3a8a 0,#0f172a 34%,#020617
 .real-chips{display:flex;gap:8px;flex-wrap:wrap}
 .real-chip{background:rgba(2,6,23,.38);border:1px solid rgba(148,163,184,.18);border-radius:999px;padding:7px 10px;font-size:13px;color:#e5e7eb}
 .real-chip.over{background:rgba(127,29,29,.35);border-color:rgba(248,113,113,.4)}
-@media(max-width:1000px){.real-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.real-top-head{flex-direction:column}.real-top-actions{justify-content:flex-start}}
-@media(max-width:650px){.real-top{border-radius:18px;padding:14px}.real-grid{grid-template-columns:1fr}.real-update{grid-template-columns:1fr}.real-value{font-size:28px}.real-top-btn{width:100%}}
+@media(max-width:1000px){.real-sub-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.real-top-head{flex-direction:column}.real-top-actions{justify-content:flex-start}}
+@media(max-width:650px){.real-top{border-radius:18px;padding:14px}.real-hero-value{font-size:38px}.real-sub-grid{grid-template-columns:1fr}.real-update{grid-template-columns:1fr}.real-top-btn{width:calc(50% - 4px)}}
 
 /* BP_OCR_CANDIDATES_V1: OCR amount candidates in the receipt review card */
 .candidate-list{display:flex;flex-direction:column;gap:6px;margin:8px 0}
 .candidate{display:flex;align-items:center;gap:8px;font-size:13px;padding:7px 10px;border:1px solid #334155;border-radius:10px;cursor:pointer}
 .candidate input{width:auto;margin:0}
+.candidate-text{flex:1}
 .candidate.not-recommended{color:#94a3b8;border-style:dashed}
+.candidate-tag{font-size:11px;font-weight:800;padding:3px 8px;border-radius:999px;background:#7c3aed;color:white;white-space:nowrap}
+.candidate-tag.not-recommended{background:transparent;border:1px solid #475569;color:#94a3b8}
 
 </style>
 </head>
@@ -693,20 +739,20 @@ body{background:radial-gradient(circle at top left,#1e3a8a 0,#0f172a 34%,#020617
 </div>
 
 {% if receipt_review %}
-<div class="card" id="receipt-review" style="border-color:var(--orange)">
-<h2>Potvrdiť účtenku</h2>
+<div class="card" id="receipt-review" style="border-color:#7c3aed">
+<h2>📷 Potvrdiť účtenku</h2>
 <div class="small">Odhad z OCR — over si sumu a dátum, priradí sa kategória, a až potom sa uloží ako výdavok.</div>
 <form method="post" action="/receipt/confirm">
 <input type="hidden" name="receipt_id" value="{{receipt_review.receipt_id}}">
 <input type="hidden" name="image_path" value="{{receipt_review.image_path}}">
-<input type="hidden" name="merchant" value="{{receipt_review.merchant or ''}}">
 {% if receipt_review.candidates %}
 <label>Nájdené sumy na účtenke</label>
 <div class="candidate-list">
 {% for c in receipt_review.candidates %}
 <label class="candidate {% if c.not_recommended %}not-recommended{% endif %}">
 <input type="radio" name="_candidate_pick" onclick="document.getElementById('receipt-amount').value='{{'%.2f'|format(c.amount)}}'">
-{{c.label}}: {{"%.2f"|format(c.amount)}} €{% if c.not_recommended %} (neodporúčané){% endif %}
+<span class="candidate-text">{% if not c.not_recommended and c.amount == receipt_review.amount %}Odporúčané: {% endif %}{{c.label}}: {{"%.2f"|format(c.amount)}} €</span>
+<span class="candidate-tag {% if c.not_recommended %}not-recommended{% endif %}">{% if c.not_recommended %}Neodporúčané{% else %}Použiť{% endif %}</span>
 </label>
 {% endfor %}
 </div>
@@ -714,8 +760,8 @@ body{background:radial-gradient(circle at top left,#1e3a8a 0,#0f172a 34%,#020617
 <label>Kategória</label>
 <select name="name">{% for t in expense_types %}<option {% if t=='Iné' %}selected{% endif %}>{{t}}</option>{% endfor %}</select>
 <label>Suma</label><input id="receipt-amount" name="amount" value="{{receipt_review.amount or ''}}" placeholder="skontroluj sumu">
+<label>Poznámka / obchod (voliteľné)</label><input name="merchant" value="{{receipt_review.merchant or ''}}" placeholder="napr. Lidl">
 <label>Dátum</label><input name="date" value="{{receipt_review.date or today}}">
-{% if receipt_review.merchant %}<div class="small">Rozpoznané: {{receipt_review.merchant}}</div>{% endif %}
 <div class="btn-row">
 <button>Uložiť výdavok</button>
 <a href="/"><button type="button" class="secondary">Zahodiť</button></a>
@@ -929,8 +975,8 @@ body{background:radial-gradient(circle at top left,#1e3a8a 0,#0f172a 34%,#020617
 </div>
 </div>
 
-<div class="card section" id="envelopes">
-<h2>Obálky (mesačný rozpočet po kategóriách)</h2>
+<details class="card section" id="envelopes-manage">
+<summary>Obálky — správa (pridať novú / zmazať)</summary>
 {% if envelope_rows %}
 <div class="table-scroll">
 <table><tr><th>Kategória</th><th>Limit</th><th>Minuté</th><th>Zostáva</th><th>Priemer/mesiac</th><th></th></tr>
@@ -953,7 +999,7 @@ body{background:radial-gradient(circle at top left,#1e3a8a 0,#0f172a 34%,#020617
 </table>
 </div>
 {% else %}<div class="small">Zatiaľ žiadna obálka. Pridaj limit pre kategóriu vľavo.</div>{% endif %}
-</div>
+</details>
 
 <div class="card section" id="debts">
 <h2>Dlhy</h2>
@@ -1094,6 +1140,12 @@ body{background:radial-gradient(circle at top left,#1e3a8a 0,#0f172a 34%,#020617
     return h ? (h.closest(".card, .section") || h.parentElement) : null;
   }
 
+  function sectionByHeadingPrefix(prefix){
+    const heads = Array.from(document.querySelectorAll("h2, summary"));
+    const h = heads.find(x => norm(x.textContent).indexOf(norm(prefix)) === 0);
+    return h ? (h.closest(".card, .section") || h.parentElement) : null;
+  }
+
   function todayIso(){
     const d = new Date();
     const y = d.getFullYear();
@@ -1138,86 +1190,141 @@ body{background:radial-gradient(circle at top left,#1e3a8a 0,#0f172a 34%,#020617
     else main.appendChild(card);
   }
 
+  function buildRow(item, groupClass){
+    const r = document.createElement("div");
+    r.className = "safety-review-row" + (groupClass ? " " + groupClass : "");
+    r.innerHTML =
+      '<div class="safety-review-name"></div>' +
+      '<div class="safety-review-sum"></div>' +
+      '<div class="safety-review-x" title="Nezaplatené">✕</div>' +
+      '<div class="safety-review-due"></div>' +
+      '<div class="safety-review-actions"></div>';
+    r.querySelector(".safety-review-name").textContent = item.name;
+    r.querySelector(".safety-review-sum").textContent = item.sum;
+    r.querySelector(".safety-review-due").textContent = item.dueText || "";
+    if(item.badge){
+      const b = document.createElement("span");
+      b.className = "badge " + (item.badgeClass || "");
+      b.textContent = item.badge;
+      r.querySelector(".safety-review-x").replaceWith(b);
+    }
+    if(item.payForm){
+      const f = item.payForm.cloneNode(true);
+      const b = f.querySelector("button");
+      if(b) b.textContent = "✓ Zaplatené";
+      r.querySelector(".safety-review-actions").appendChild(f);
+    }
+    if(item.deferForm){
+      const f = item.deferForm.cloneNode(true);
+      const b = f.querySelector("button");
+      if(b) b.textContent = "↷ Odložiť";
+      r.querySelector(".safety-review-actions").appendChild(f);
+    }
+    return r;
+  }
+
+  function addGroup(list, title, items, groupClass, collapsedByDefault){
+    if(!items.length) return;
+    const wrap = collapsedByDefault ? document.createElement("details") : document.createElement("div");
+    wrap.className = "safety-review-group";
+    const heading = collapsedByDefault ? document.createElement("summary") : document.createElement("div");
+    heading.className = "safety-review-group-title";
+    heading.textContent = title + " (" + items.length + ")";
+    wrap.appendChild(heading);
+    const body = document.createElement("div");
+    body.className = "safety-review-list";
+    items.forEach(function(item){ body.appendChild(buildRow(item, groupClass)); });
+    wrap.appendChild(body);
+    list.appendChild(wrap);
+  }
+
   function addUnpaidReview(){
     if(document.querySelector(".safety-review")) return;
 
     const unpaidSection = sectionByExactHeading("Nezaplatené / treba zaplatiť");
+    const deferredSection = sectionByExactHeading("Odložené");
+    const paidSection = sectionByHeadingPrefix("Zaplatené");
     if(!unpaidSection) return;
 
-    const rows = Array.from(unpaidSection.querySelectorAll("tbody tr"));
-    const items = [];
+    const now = todayIso();
+    const overdue = [], soon = [], pending = [];
 
-    rows.forEach(function(row){
+    Array.from(unpaidSection.querySelectorAll("tbody tr")).forEach(function(row){
       const cells = Array.from(row.querySelectorAll("td"));
       if(cells.length < 3) return;
-
       const name = (cells[0].innerText || cells[0].textContent || "").trim();
       const sum = (cells[1].innerText || cells[1].textContent || "").trim();
       const due = (cells[2].innerText || cells[2].textContent || "").trim();
-
       if(!name || !sum) return;
 
       const payForm = Array.from(row.querySelectorAll("form")).find(function(f){
         return !!f.querySelector('input[name="state"][value="paid_me"]');
       });
+      const deferForm = Array.from(row.querySelectorAll("form")).find(function(f){
+        return (f.getAttribute("action") || "").indexOf("/payment/defer/") !== -1;
+      });
 
-      items.push({name:name, sum:sum, due:due, payForm:payForm});
+      const isOverdue = due && due < now;
+      const daysUntil = due ? Math.round((new Date(due) - new Date(now)) / 86400000) : null;
+      const isSoon = !isOverdue && daysUntil !== null && daysUntil >= 0 && daysUntil <= 3;
+      const dueText = due ? (isOverdue ? "Po splatnosti: " + due : "Termín: " + due) : "Termín nezadaný";
+      const item = {name:name, sum:sum, dueText:dueText, payForm:payForm, deferForm:deferForm, due:due};
+
+      if(isOverdue) overdue.push(item);
+      else if(isSoon) soon.push(item);
+      else pending.push(item);
     });
 
-    if(!items.length) return;
-
-    const now = todayIso();
-
-    items.sort(function(a,b){
-      const ao = a.due && a.due < now ? 0 : 1;
-      const bo = b.due && b.due < now ? 0 : 1;
-      if(ao !== bo) return ao - bo;
-      return (a.due || "").localeCompare(b.due || "");
+    [overdue, soon, pending].forEach(function(arr){
+      arr.sort(function(a,b){ return (a.due||"").localeCompare(b.due||""); });
     });
 
-    const overdueCount = items.filter(x => x.due && x.due < now).length;
+    const deferred = [];
+    if(deferredSection){
+      Array.from(deferredSection.querySelectorAll("tbody tr")).forEach(function(row){
+        const cells = Array.from(row.querySelectorAll("td"));
+        if(cells.length < 3) return;
+        const name = (cells[0].innerText || cells[0].textContent || "").trim();
+        const sum = (cells[1].innerText || cells[1].textContent || "").trim();
+        const to = (cells[2].innerText || cells[2].textContent || "").trim();
+        if(!name || !sum) return;
+        deferred.push({name:name, sum:sum, dueText: to ? "Odložené do: " + to : "", badge:"Odložené", badgeClass:"warn"});
+      });
+    }
+
+    const paid = [];
+    if(paidSection){
+      Array.from(paidSection.querySelectorAll("tbody tr")).forEach(function(row){
+        const cells = Array.from(row.querySelectorAll("td"));
+        if(cells.length < 3) return;
+        const name = (cells[0].innerText || cells[0].textContent || "").trim();
+        const sum = (cells[1].innerText || cells[1].textContent || "").trim();
+        const stateEl = cells[2].querySelector(".badge");
+        const stateText = (stateEl ? stateEl.textContent : cells[2].textContent || "").trim();
+        if(!name || !sum) return;
+        paid.push({name:name, sum:sum, dueText:"", badge: stateText || "Zaplatené", badgeClass:"ok"});
+      });
+    }
+
+    if(!overdue.length && !soon.length && !pending.length && !deferred.length && !paid.length) return;
 
     const card = document.createElement("section");
     card.className = "safety-review";
     card.id = "payment-review";
     card.innerHTML =
-      '<h2>Kontrola nezaplatených platieb</h2>' +
+      '<h2>Platby</h2>' +
       '<div class="hint">' +
-        'Každé otvorenie ukazuje iba to, čo ešte nie je potvrdené ako zaplatené. ' +
-        'Dátum splatnosti nikdy neoznačí platbu automaticky. ' +
-        (overdueCount ? '<strong style="color:#fecaca">Po splatnosti: '+overdueCount+'</strong>' : '') +
+        'Dátum splatnosti nikdy neoznačí platbu automaticky — iba manuálne potvrdenie. ' +
+        (overdue.length ? '<strong style="color:#fecaca">Po splatnosti: '+overdue.length+'</strong>' : '') +
       '</div>' +
-      '<div class="safety-review-list"></div>';
+      '<div class="safety-review-groups"></div>';
 
-    const list = card.querySelector(".safety-review-list");
-
-    items.forEach(function(item){
-      const overdue = item.due && item.due < now;
-      const daysUntil = item.due ? Math.round((new Date(item.due) - new Date(now)) / 86400000) : null;
-      const dueSoon = !overdue && daysUntil !== null && daysUntil >= 0 && daysUntil <= 3;
-      const r = document.createElement("div");
-      r.className = "safety-review-row" + (overdue ? " overdue" : dueSoon ? " due-soon" : "");
-      r.innerHTML =
-        '<div class="safety-review-name"></div>' +
-        '<div class="safety-review-sum"></div>' +
-        '<div class="safety-review-x" title="Nezaplatené">✕</div>' +
-        '<div class="safety-review-due"></div>' +
-        '<div class="safety-review-actions"></div>';
-
-      r.querySelector(".safety-review-name").textContent = item.name;
-      r.querySelector(".safety-review-sum").textContent = item.sum;
-      r.querySelector(".safety-review-due").textContent =
-        item.due ? (overdue ? "Po splatnosti: " + item.due : "Termín: " + item.due) : "Termín nezadaný";
-
-      if(item.payForm){
-        const f = item.payForm.cloneNode(true);
-        const b = f.querySelector("button");
-        if(b) b.textContent = "✓ Zaplatené";
-        r.querySelector(".safety-review-actions").appendChild(f);
-      }
-
-      list.appendChild(r);
-    });
+    const groups = card.querySelector(".safety-review-groups");
+    addGroup(groups, "Po splatnosti", overdue, "overdue", false);
+    addGroup(groups, "Splatné čoskoro", soon, "due-soon", false);
+    addGroup(groups, "Čaká na potvrdenie", pending, "", false);
+    addGroup(groups, "Odložené", deferred, "deferred", true);
+    addGroup(groups, "Zaplatené", paid, "paid", true);
 
     const main = document.querySelector(".main") || document.querySelector(".app") || document.body;
     const summary = document.querySelector(".summarygrid");
@@ -1325,50 +1432,66 @@ body{background:radial-gradient(circle at top left,#1e3a8a 0,#0f172a 34%,#020617
     }) + " €";
   }
 
-  function addCard(data){
+  function addCard(summary){
     if(document.querySelector(".editable-envelopes")) return;
 
-    const envelopes = data.envelopes || [];
+    const envelopes = summary.envelope_items || [];
     if(!envelopes.length) return;
 
     const total = envelopes.reduce(function(sum, e){
-      return sum + Number(e.amount || 0);
+      return sum + Number(e.budget ?? e.amount ?? 0);
     }, 0);
 
     const card = document.createElement("section");
     card.className = "editable-envelopes";
+    card.id = "envelopes";
     card.innerHTML =
-      '<h2>Obálky / mesačné rozpočty</h2>' +
-      '<div class="hint">Tieto sumy sa odpočítavajú v reálnom odhade. Spolu: <strong>'+eur(total)+'</strong></div>' +
-      '<div class="editable-envelopes-list"></div>';
+      '<h2>Obálky</h2>' +
+      '<div class="hint">Mesačné rozpočty po kategóriách. Zostávajúca suma sa odpočítava v reálnom odhade. Plán spolu: <strong>'+eur(total)+'</strong></div>' +
+      '<div class="envelope-grid"></div>';
 
-    const list = card.querySelector(".editable-envelopes-list");
+    const grid = card.querySelector(".envelope-grid");
 
     envelopes.forEach(function(e){
-      const form = document.createElement("form");
-      form.className = "envelope-edit-row";
-      form.method = "post";
-      form.action = "/api/envelopes/update";
+      const budget = Number(e.budget ?? e.amount ?? 0);
+      const spent = Number(e.spent || 0);
+      const remaining = Number(e.remaining || 0);
+      const over = Number(e.over || 0);
+      const pct = budget > 0 ? Math.min((spent / budget) * 100, 100) : 0;
+      const nearlyExhausted = !over && budget > 0 && (remaining / budget) <= 0.15;
+      const state = over > 0 ? "over" : nearlyExhausted ? "warn" : "";
 
-      form.innerHTML =
-        '<input type="hidden" name="id">' +
-        '<div>' +
-          '<label>Názov</label>' +
-          '<input name="name">' +
+      const envCard = document.createElement("div");
+      envCard.className = "envelope-card" + (state ? " " + state : "");
+      envCard.innerHTML =
+        '<div class="envelope-card-head">' +
+          '<span class="envelope-card-name">'+(e.name||"Obálka")+'</span>' +
+          '<span class="envelope-card-remaining">'+eur(remaining)+' ostáva</span>' +
         '</div>' +
-        '<div>' +
-          '<label>Mesačná suma</label>' +
-          '<input name="amount" inputmode="decimal" type="number" step="0.01" min="0">' +
+        '<div class="envelope-progress-bar"><div class="envelope-progress-fill'+(state?" "+state:"")+'" style="width:'+pct+'%"></div></div>' +
+        '<div class="envelope-card-sub">'+eur(budget)+' plán · '+eur(spent)+' minuté</div>' +
+        (over > 0 ? '<div class="envelope-card-over">Prekročené o '+eur(over)+'</div>' : '') +
+        '<div class="envelope-card-actions">' +
+          '<a class="envelope-card-btn" href="#expense-quick">+ Výdavok</a>' +
+          '<button type="button" class="envelope-card-btn secondary envelope-toggle-edit">Upraviť</button>' +
         '</div>' +
-        '<div>' +
-          '<button type="submit">Uložiť</button>' +
-        '</div>';
+        '<form class="envelope-edit-row" method="post" action="/api/envelopes/update" hidden>' +
+          '<input type="hidden" name="id">' +
+          '<div><label>Názov</label><input name="name"></div>' +
+          '<div><label>Mesačná suma</label><input name="amount" inputmode="decimal" type="number" step="0.01" min="0"></div>' +
+          '<div><button type="submit">Uložiť</button></div>' +
+        '</form>';
 
-      form.querySelector('input[name="id"]').value = e.id || "";
-      form.querySelector('input[name="name"]').value = e.name || "";
-      form.querySelector('input[name="amount"]').value = Number(e.amount || 0);
+      const editForm = envCard.querySelector(".envelope-edit-row");
+      editForm.querySelector('input[name="id"]').value = e.id || "";
+      editForm.querySelector('input[name="name"]').value = e.name || "";
+      editForm.querySelector('input[name="amount"]').value = budget;
 
-      list.appendChild(form);
+      envCard.querySelector(".envelope-toggle-edit").addEventListener("click", function(){
+        editForm.hidden = !editForm.hidden;
+      });
+
+      grid.appendChild(envCard);
     });
 
     const main = document.querySelector(".main") || document.querySelector(".app") || document.body;
@@ -1382,7 +1505,7 @@ body{background:radial-gradient(circle at top left,#1e3a8a 0,#0f172a 34%,#020617
   }
 
   ready(function(){
-    fetch("/api/envelopes", {cache:"no-store"})
+    fetch("/api/balance-first-summary", {cache:"no-store"})
       .then(function(r){ return r.json(); })
       .then(addCard)
       .catch(function(err){ console.error("envelope editor failed", err); });
@@ -1528,6 +1651,13 @@ body{background:radial-gradient(circle at top left,#1e3a8a 0,#0f172a 34%,#020617
   function ready(fn){ if(document.readyState !== "loading") fn(); else document.addEventListener("DOMContentLoaded", fn); }
   function eur(v){ return Number(v || 0).toLocaleString("sk-SK",{minimumFractionDigits:2,maximumFractionDigits:2})+" €"; }
   function cls(v){ const n=Number(v||0); if(n<0)return"bad"; if(n<100)return"warn"; return"good"; }
+  function envCls(data, remainingEnv){
+    const over = Number(data.envelopes_over_total||0) > 0;
+    const total = Number(data.envelopes_total||0);
+    if(over) return "warn";
+    if(total > 0 && (remainingEnv/total) <= 0.15) return "warn";
+    return "teal";
+  }
 
   function hideOldMetricCards(){
     document.querySelectorAll(".topgrid,.summarygrid,.envelope-summary,.fin-overview").forEach(function(el){
@@ -1542,6 +1672,11 @@ body{background:radial-gradient(circle at top left,#1e3a8a 0,#0f172a 34%,#020617
     const remainingEnv = Number(data.envelopes_remaining_total ?? data.envelopes_total ?? 0);
     const finalValue = Number(data.estimated_after_payments_and_envelopes || 0);
     const missing = Number(data.missing_after_everything || 0);
+    const envState = envCls(data, remainingEnv);
+
+    const caption = finalValue < 0
+      ? "Chýba " + eur(missing) + ", ak chceš pokryť všetky nezaplatené platby aj zostávajúce obálky."
+      : "Po platbách a obálkach ostáva " + eur(finalValue) + ".";
 
     const card = document.createElement("section");
     card.className = "real-top";
@@ -1552,28 +1687,32 @@ body{background:radial-gradient(circle at top left,#1e3a8a 0,#0f172a 34%,#020617
         '<div class="real-top-actions">' +
           '<a class="real-top-btn add" href="#expense-quick">+ Výdavok</a>' +
           '<a class="real-top-btn ocr" href="/receipts">📷 OCR bloček</a>' +
-          '<a class="real-top-btn pay" href="#payment-review">✓ Skontrolovať platby</a>' +
-          '<a class="real-top-btn env" href="#envelopes">✉ Upraviť obálky</a>' +
+          '<a class="real-top-btn pay" href="#payment-review">✓ Platby</a>' +
+          '<a class="real-top-btn env" href="#envelopes">✉ Obálky</a>' +
+          '<a class="real-top-btn balance" href="#balance-update-field">✎ Stav účtu</a>' +
         '</div>' +
       '</div>' +
-      '<div class="real-warning '+(finalValue < 0 ? 'show' : '')+'">Pozor: po započítaní platieb a zostávajúcich obálok chýba '+eur(missing)+'.</div>' +
-      '<form class="real-update" method="post" action="/api/balance/update">' +
+      '<div class="real-hero">' +
+        '<div class="real-hero-value '+cls(finalValue)+'">'+eur(finalValue)+'</div>' +
+        '<div class="real-hero-caption '+(finalValue < 0 ? 'bad' : 'ok')+'">'+caption+'</div>' +
+      '</div>' +
+      '<div class="real-sub-grid">' +
+        '<div class="real-metric"><div class="real-label">Účet</div><div class="real-value">'+eur(data.current_balance)+'</div></div>' +
+        '<div class="real-metric"><div class="real-label">Nezaplatené</div><div class="real-value bad">-'+eur(data.unpaid_payments_total)+'</div></div>' +
+        '<div class="real-metric"><div class="real-label">Obálky ostáva</div><div class="real-value '+envState+'">'+eur(remainingEnv)+'</div></div>' +
+      '</div>' +
+      '<form class="real-update" id="balance-update-field" method="post" action="/api/balance/update">' +
         '<div><label>Rýchla aktualizácia stavu účtu</label><input name="account_balance" inputmode="decimal" type="number" step="0.01" value="'+Number(data.current_balance||0)+'"></div>' +
         '<div><label>Posledná aktualizácia</label><input disabled value="'+(data.last_manual_review || "nezadané")+'"></div>' +
         '<div><button type="submit">Uložiť stav</button></div>' +
       '</form>' +
-      '<div class="real-grid">' +
-        '<div class="real-metric"><div class="real-label">Aktuálny stav účtu</div><div class="real-value">'+eur(data.current_balance)+'</div></div>' +
-        '<div class="real-metric"><div class="real-label">Nezaplatené platby</div><div class="real-value bad">-'+eur(data.unpaid_payments_total)+'</div></div>' +
-        '<div class="real-metric"><div class="real-label">Zostáva v obálkach</div><div class="real-value warn">-'+eur(remainingEnv)+'</div></div>' +
-        '<div class="real-metric"><div class="real-label">Reálny odhad</div><div class="real-value '+cls(finalValue)+'">'+eur(finalValue)+'</div></div>' +
-      '</div>' +
+      '<details class="real-formula"><summary>Vzorec výpočtu</summary>' +
       '<div class="real-calc">' +
         '<div>Aktuálny stav účtu</div><div class="amount">'+eur(data.current_balance)+'</div>' +
         '<div>- nezaplatené platby</div><div class="amount bad">-'+eur(data.unpaid_payments_total)+'</div>' +
         '<div>- zostávajúce obálky</div><div class="amount warn">-'+eur(remainingEnv)+'</div>' +
         '<div class="total">= reálny odhad</div><div class="amount total '+cls(finalValue)+'">'+eur(finalValue)+'</div>' +
-      '</div>' +
+      '</div></details>' +
       '<div class="real-chips"></div>';
 
     const chips = card.querySelector(".real-chips");
