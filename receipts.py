@@ -21,9 +21,24 @@ VALID_SOURCES = {SOURCE_MANUAL, SOURCE_OCR, SOURCE_IMPORT}
 
 _AMOUNT_RE = re.compile(r"(\d{1,4}[.,]\d{2})\b")
 _TOTAL_KEYWORDS = ("spolu", "celkom", "total", "suma", "k úhrade", "k uhrade")
+_CARD_KEYWORDS = ("kartou", "card", "platbou kartou", "uhradené kartou", "uhradene kartou")
+_VAT_KEYWORDS = ("dph", "vat")
+_BASE_KEYWORDS = ("základ", "zaklad dane", "zaklad", "tax base")
 _DATE_DMY4_RE = re.compile(r"\b(\d{2})[.\-/](\d{2})[.\-/](\d{4})\b")
 _DATE_DMY2_RE = re.compile(r"\b(\d{2})[.\-/](\d{2})[.\-/](\d{2})\b")
 _DATE_YMD_RE = re.compile(r"\b(\d{4})-(\d{2})-(\d{2})\b")
+
+# Candidate kinds that a review UI should mark as "not recommended" — a
+# receipt's VAT amount or tax base is almost never what the user actually
+# paid, but OCR can't tell them apart from the real total by shape alone.
+NOT_RECOMMENDED_KINDS = {"vat", "base"}
+KIND_LABEL = {
+    "total": "Celkom / spolu",
+    "card": "Platba kartou",
+    "vat": "DPH",
+    "base": "Základ dane",
+    "other": "Iná suma na účtenke",
+}
 
 
 def parse_receipt_placeholder(image_path):
@@ -43,23 +58,78 @@ def parse_receipt_placeholder(image_path):
     }
 
 
-def _extract_amount(raw_text):
-    """Best-guess total from OCR'd receipt text: the largest amount-shaped
-    number, preferring a line that looks like a total/summary line. Purely
-    heuristic — receipts.py's caller must always treat this as a starting
-    guess for the user to correct, never as a fact.
+def _classify_line(line_lower):
+    """Which kind of money value a receipt line most likely holds. Checked
+    in this order because a VAT/base line often also contains the word
+    "spolu" (e.g. "DPH spolu") — the more specific label must win."""
+    if any(k in line_lower for k in _VAT_KEYWORDS):
+        return "vat"
+    if any(k in line_lower for k in _BASE_KEYWORDS):
+        return "base"
+    if any(k in line_lower for k in _CARD_KEYWORDS):
+        return "card"
+    if any(k in line_lower for k in _TOTAL_KEYWORDS):
+        return "total"
+    return "other"
+
+
+def extract_amount_candidates(raw_text):
+    """Every amount-shaped number found in `raw_text`, tagged with the kind
+    of line it appeared on (total/card/vat/base/other), so a review UI can
+    show all of them and flag vat/base as not recommended instead of
+    silently picking one. Order of first appearance, duplicates (same
+    kind+amount) collapsed.
     """
     if not raw_text:
-        return None
+        return []
+    seen = set()
     candidates = []
     for line in raw_text.splitlines():
-        is_total_line = any(k in line.lower() for k in _TOTAL_KEYWORDS)
+        kind = _classify_line(line.lower())
         for m in _AMOUNT_RE.finditer(line):
-            candidates.append((is_total_line, float(m.group(1).replace(",", "."))))
-    if not candidates:
-        return None
-    candidates.sort(key=lambda c: (c[0], c[1]))
-    return candidates[-1][1]
+            amount = float(m.group(1).replace(",", "."))
+            key = (kind, amount)
+            if key in seen:
+                continue
+            seen.add(key)
+            candidates.append({
+                "kind": kind,
+                "label": KIND_LABEL[kind],
+                "amount": amount,
+                "not_recommended": kind in NOT_RECOMMENDED_KINDS,
+            })
+    return candidates
+
+
+def _pick_default_amount(candidates):
+    """Best starting guess for the review form: prefer the payable total
+    (a 'total' or 'card' line), never a VAT/tax-base line even if it's the
+    only one found, otherwise fall back to the largest amount seen. This
+    is only ever a pre-filled suggestion — create_expense_from_receipt_result()
+    still requires the user's confirmed value, never this guess directly.
+    """
+    for kind in ("total", "card"):
+        matches = [c["amount"] for c in candidates if c["kind"] == kind]
+        if matches:
+            return max(matches)
+    other = [c["amount"] for c in candidates if kind_allowed(c)]
+    if other:
+        return max(other)
+    return None
+
+
+def kind_allowed(candidate):
+    return candidate["kind"] not in NOT_RECOMMENDED_KINDS
+
+
+def _extract_amount(raw_text):
+    """Best-guess total from OCR'd receipt text. Purely heuristic —
+    receipts.py's caller must always treat this as a starting guess for
+    the user to correct, never as a fact. Kept as a thin wrapper around
+    extract_amount_candidates()/_pick_default_amount() for callers that
+    only want the single best guess.
+    """
+    return _pick_default_amount(extract_amount_candidates(raw_text))
 
 
 def _extract_date(raw_text):
@@ -144,8 +214,10 @@ def parse_receipt(image_path):
     if raw_text is None:
         return parse_receipt_placeholder(image_path)
 
+    candidates = extract_amount_candidates(raw_text)
     return {
-        "amount": _extract_amount(raw_text),
+        "amount": _pick_default_amount(candidates),
+        "amount_candidates": candidates,
         "date": _extract_date(raw_text),
         "merchant": _extract_merchant(raw_text),
         "raw_text": raw_text,

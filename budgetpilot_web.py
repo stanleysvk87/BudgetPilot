@@ -4,7 +4,6 @@ import subprocess
 import uuid
 from pathlib import Path
 from datetime import date
-from urllib.parse import urlencode
 from flask import Flask, request, redirect, render_template_string
 
 import obligations as ob
@@ -12,6 +11,7 @@ import receipts
 import payment_events as pe
 import envelopes as env
 import budgetpilot as bp
+import audit_log
 from forecast import payment_state, PENDING, PAID_ME, PAID_OTHER, PAID_RESERVE, DEFERRED
 
 BASE = Path.home() / "BudgetPilot"
@@ -25,6 +25,20 @@ ENVELOPES = DATA / "envelopes.json"
 DEBTS = DATA / "debts.json"
 ONETIME = DATA / "onetime.json"
 RECEIPTS_DIR = DATA / "receipts"
+AUDIT_LOG_PATH = DATA / "audit_log.json"
+
+AUDIT_ACTION_LABEL = {
+    "balance_updated": "Stav účtu upravený",
+    "payment_paid": "Platba označená ako zaplatená",
+    "payment_deferred": "Platba odložená",
+    "envelope_amount_changed": "Suma obálky upravená",
+    "ocr_expense_saved": "Výdavok z účtenky uložený",
+    "expense_added": "Výdavok pridaný",
+}
+
+
+def log_audit(action, detail=""):
+    audit_log.log_action(AUDIT_LOG_PATH, action, detail)
 
 PRIORITY_LABEL = {
     "mandatory": "nevyhnutná",
@@ -534,6 +548,12 @@ body{background:radial-gradient(circle at top left,#1e3a8a 0,#0f172a 34%,#020617
 @media(max-width:1000px){.real-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.real-top-head{flex-direction:column}.real-top-actions{justify-content:flex-start}}
 @media(max-width:650px){.real-top{border-radius:18px;padding:14px}.real-grid{grid-template-columns:1fr}.real-update{grid-template-columns:1fr}.real-value{font-size:28px}.real-top-btn{width:100%}}
 
+/* BP_OCR_CANDIDATES_V1: OCR amount candidates in the receipt review card */
+.candidate-list{display:flex;flex-direction:column;gap:6px;margin:8px 0}
+.candidate{display:flex;align-items:center;gap:8px;font-size:13px;padding:7px 10px;border:1px solid #334155;border-radius:10px;cursor:pointer}
+.candidate input{width:auto;margin:0}
+.candidate.not-recommended{color:#94a3b8;border-style:dashed}
+
 </style>
 </head>
 <body>
@@ -671,9 +691,20 @@ body{background:radial-gradient(circle at top left,#1e3a8a 0,#0f172a 34%,#020617
 <input type="hidden" name="receipt_id" value="{{receipt_review.receipt_id}}">
 <input type="hidden" name="image_path" value="{{receipt_review.image_path}}">
 <input type="hidden" name="merchant" value="{{receipt_review.merchant or ''}}">
+{% if receipt_review.candidates %}
+<label>Nájdené sumy na účtenke</label>
+<div class="candidate-list">
+{% for c in receipt_review.candidates %}
+<label class="candidate {% if c.not_recommended %}not-recommended{% endif %}">
+<input type="radio" name="_candidate_pick" onclick="document.getElementById('receipt-amount').value='{{'%.2f'|format(c.amount)}}'">
+{{c.label}}: {{"%.2f"|format(c.amount)}} €{% if c.not_recommended %} (neodporúčané){% endif %}
+</label>
+{% endfor %}
+</div>
+{% endif %}
 <label>Kategória</label>
 <select name="name">{% for t in expense_types %}<option {% if t=='Iné' %}selected{% endif %}>{{t}}</option>{% endfor %}</select>
-<label>Suma</label><input name="amount" value="{{receipt_review.amount or ''}}" placeholder="skontroluj sumu">
+<label>Suma</label><input id="receipt-amount" name="amount" value="{{receipt_review.amount or ''}}" placeholder="skontroluj sumu">
 <label>Dátum</label><input name="date" value="{{receipt_review.date or today}}">
 {% if receipt_review.merchant %}<div class="small">Rozpoznané: {{receipt_review.merchant}}</div>{% endif %}
 <div class="btn-row">
@@ -942,6 +973,19 @@ body{background:radial-gradient(circle at top left,#1e3a8a 0,#0f172a 34%,#020617
 </div>
 {% else %}<div class="small">Zatiaľ žiadny dlh.</div>{% endif %}
 </div>
+
+<details class="card" id="audit">
+<summary>História zmien ({{audit_entries|length}})</summary>
+{% if audit_entries %}
+<div class="table-scroll">
+<table><tr><th>Kedy</th><th>Akcia</th><th>Detail</th></tr>
+{% for a in audit_entries %}
+<tr><td>{{a.at}}</td><td>{{audit_action_label.get(a.action, a.action)}}</td><td>{{a.detail}}</td></tr>
+{% endfor %}
+</table>
+</div>
+{% else %}<div class="small">Zatiaľ žiadna aktivita.</div>{% endif %}
+</details>
 
 <details class="card">
 <summary>Technický výstup</summary>
@@ -1677,15 +1721,19 @@ def render_page(edit_income=None, edit_payment=None, edit_expense=None):
         expense_form = expenses[edit_expense]
 
     receipt_review = None
-    if request.args.get("review_receipt"):
-        amount_raw = request.args.get("guess_amount", "")
-        receipt_review = {
-            "receipt_id": request.args.get("review_receipt"),
-            "image_path": request.args.get("image_path", ""),
-            "amount": float(amount_raw) if amount_raw else None,
-            "date": request.args.get("guess_date") or None,
-            "merchant": request.args.get("guess_merchant") or None,
-        }
+    review_id = request.args.get("review_receipt")
+    if review_id:
+        review_path = RECEIPTS_DIR / f"{review_id}.review.json"
+        if review_path.exists():
+            stored = load(review_path, {})
+            receipt_review = {
+                "receipt_id": review_id,
+                "image_path": stored.get("image_path", ""),
+                "amount": stored.get("amount"),
+                "date": stored.get("date") or today.isoformat(),
+                "merchant": stored.get("merchant"),
+                "candidates": stored.get("candidates", []),
+            }
 
     return render_template_string(
         HTML,
@@ -1708,6 +1756,8 @@ def render_page(edit_income=None, edit_payment=None, edit_expense=None):
         onetime_resolved=onetime_resolved, priority_label=PRIORITY_LABEL,
         receipt_review=receipt_review,
         forecast_months=forecast_months,
+        audit_entries=list(reversed(audit_log.load_audit_log(AUDIT_LOG_PATH)))[:30],
+        audit_action_label=AUDIT_ACTION_LABEL,
     )
 
 @app.route("/")
@@ -1815,6 +1865,8 @@ def payment_set_state(i):
         events = pe.load_payment_events()
         events = pe.set_payment_event(events, data[i]["id"], cycle_key, new_state)
         pe.save_payment_events(events)
+        if new_state == PAID_ME:
+            log_audit("payment_paid", f"{data[i].get('name')} {data[i].get('amount')} €")
     return go_home()
 
 @app.post("/payment/defer/<int:i>")
@@ -1826,6 +1878,7 @@ def payment_defer(i):
         events = pe.load_payment_events()
         events = pe.defer_payment_event(events, data[i]["id"], cycle_key, today)
         pe.save_payment_events(events)
+        log_audit("payment_deferred", f"{data[i].get('name')} {data[i].get('amount')} €")
     return go_home()
 
 @app.post("/payment/delete/<int:i>")
@@ -1839,14 +1892,16 @@ def payment_delete(i):
 def expense_add():
     amount = request.form.get("amount","").strip()
     if amount:
+        name = request.form.get("name","Výdavok")
         data = load(EXPENSES, [])
         data.append({
-            "name": request.form.get("name","Výdavok"),
+            "name": name,
             "amount": float(amount),
             "date": request.form.get("date", date.today().isoformat()),
             "source": receipts.SOURCE_MANUAL,
         })
         save(EXPENSES, data)
+        log_audit("expense_added", f"{name} {amount} €")
     return go_home()
 
 @app.post("/expense/update/<int:i>")
@@ -1991,14 +2046,18 @@ def receipt_upload():
     file.save(image_path)
 
     result = receipts.parse_receipt(image_path)
-    params = {"review_receipt": receipt_id, "image_path": str(image_path)}
-    if result.get("amount") is not None:
-        params["guess_amount"] = result["amount"]
-    if result.get("date"):
-        params["guess_date"] = result["date"]
-    if result.get("merchant"):
-        params["guess_merchant"] = result["merchant"]
-    return redirect(f"/?{urlencode(params)}#receipt-review")
+    # Stashed server-side (not round-tripped through the URL) so the full
+    # candidate list — arbitrarily many amounts with labels — survives the
+    # redirect into the mandatory review form without a huge query string.
+    review_path = RECEIPTS_DIR / f"{receipt_id}.review.json"
+    save(review_path, {
+        "amount": result.get("amount"),
+        "date": result.get("date"),
+        "merchant": result.get("merchant"),
+        "candidates": result.get("amount_candidates", []),
+        "image_path": str(image_path),
+    })
+    return redirect(f"/?review_receipt={receipt_id}#receipt-review")
 
 @app.post("/receipt/confirm")
 def receipt_confirm():
@@ -2017,12 +2076,17 @@ def receipt_confirm():
         "amount": float(amount),
         "date": request.form.get("date", date.today().isoformat()),
     }
+    receipt_id = request.form.get("receipt_id") or None
     expense = receipts.create_expense_from_receipt_result(
-        receipt_result, confirmed, receipt_id=request.form.get("receipt_id") or None
+        receipt_result, confirmed, receipt_id=receipt_id
     )
     data = load(EXPENSES, [])
     data.append(expense)
     save(EXPENSES, data)
+    log_audit("ocr_expense_saved", f"{confirmed['name']} {confirmed['amount']:.2f} €")
+
+    if receipt_id:
+        (RECEIPTS_DIR / f"{receipt_id}.review.json").unlink(missing_ok=True)
     return go_home()
 
 SETUP_HTML = """

@@ -10,10 +10,12 @@ from pathlib import Path
 
 from flask import jsonify, redirect, request
 
+import audit_log
 
 BASE = Path(__file__).resolve().parent
 DATA = BASE / "data"
 ENVELOPES = DATA / "envelopes.json"
+AUDIT_LOG_PATH = DATA / "audit_log.json"
 
 
 def _read_json(path: Path, default):
@@ -141,5 +143,7 @@ def register_envelope_editor(app):
         _normalize(found, amount)
 
         _write_json(ENVELOPES, envelopes)
+
+        audit_log.log_action(AUDIT_LOG_PATH, "envelope_amount_changed", f"{_name(found)} -> {amount:.2f} €")
 
         return redirect(request.referrer or "/?v=envelopes-updated")

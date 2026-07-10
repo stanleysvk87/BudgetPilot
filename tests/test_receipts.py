@@ -46,6 +46,62 @@ class ExtractAmountTests(unittest.TestCase):
         self.assertIsNone(rc._extract_amount(None))
 
 
+class ExtractAmountCandidatesTests(unittest.TestCase):
+    def test_total_plus_dph_plus_base(self):
+        raw_text = "Základ dane 21%: 35,12\nDPH 21%: 7,38\nSPOLU: 42,50"
+        candidates = rc.extract_amount_candidates(raw_text)
+        kinds = {c["kind"]: c["amount"] for c in candidates}
+        self.assertEqual(kinds["base"], 35.12)
+        self.assertEqual(kinds["vat"], 7.38)
+        self.assertEqual(kinds["total"], 42.50)
+
+    def test_vat_and_base_are_marked_not_recommended(self):
+        raw_text = "Základ dane: 35,12\nDPH: 7,38"
+        candidates = rc.extract_amount_candidates(raw_text)
+        self.assertTrue(all(c["not_recommended"] for c in candidates))
+
+    def test_total_and_card_are_not_marked_not_recommended(self):
+        raw_text = "SPOLU: 42,50\nPlatba kartou: 42,50"
+        candidates = rc.extract_amount_candidates(raw_text)
+        self.assertFalse(any(c["not_recommended"] for c in candidates))
+
+    def test_multiple_plain_amounts_all_captured(self):
+        raw_text = "Chlieb 1,20\nMlieko 0,95\nVajcia 2,10"
+        candidates = rc.extract_amount_candidates(raw_text)
+        self.assertEqual(len(candidates), 3)
+        self.assertTrue(all(c["kind"] == "other" for c in candidates))
+
+    def test_comma_decimal_format_parsed(self):
+        candidates = rc.extract_amount_candidates("SPOLU 12,34")
+        self.assertEqual(candidates[0]["amount"], 12.34)
+
+    def test_dot_decimal_format_parsed(self):
+        candidates = rc.extract_amount_candidates("TOTAL 12.34")
+        self.assertEqual(candidates[0]["amount"], 12.34)
+
+    def test_ambiguous_text_with_no_amounts_returns_empty_list(self):
+        self.assertEqual(rc.extract_amount_candidates("ďakujeme za nákup"), [])
+
+    def test_empty_text_returns_empty_list(self):
+        self.assertEqual(rc.extract_amount_candidates(""), [])
+        self.assertEqual(rc.extract_amount_candidates(None), [])
+
+    def test_default_guess_prefers_total_over_vat_and_base(self):
+        raw_text = "Základ dane: 35,12\nDPH: 7,38\nSPOLU: 42,50"
+        candidates = rc.extract_amount_candidates(raw_text)
+        self.assertEqual(rc._pick_default_amount(candidates), 42.50)
+
+    def test_default_guess_never_picks_vat_or_base_even_if_only_candidates(self):
+        raw_text = "Základ dane: 35,12\nDPH: 7,38"
+        candidates = rc.extract_amount_candidates(raw_text)
+        self.assertIsNone(rc._pick_default_amount(candidates))
+
+    def test_default_guess_falls_back_to_card_when_no_total_line(self):
+        raw_text = "Platba kartou: 18,00\nChlieb 1,20"
+        candidates = rc.extract_amount_candidates(raw_text)
+        self.assertEqual(rc._pick_default_amount(candidates), 18.00)
+
+
 class ExtractDateTests(unittest.TestCase):
     def test_dmy_dotted_format(self):
         self.assertEqual(rc._extract_date("Dátum: 09.07.2026"), "2026-07-09")

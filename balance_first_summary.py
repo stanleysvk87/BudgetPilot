@@ -9,9 +9,11 @@ from pathlib import Path
 
 from flask import jsonify, redirect, request
 
+import audit_log
 
 BASE = Path(__file__).resolve().parent
 DATA = BASE / "data"
+AUDIT_LOG_PATH = DATA / "audit_log.json"
 
 PAID_STATES = {"paid", "paid_me", "paid_other", "paid_reserve"}
 DEFERRED_STATE = "deferred"
@@ -373,5 +375,7 @@ def register_balance_first_summary(app):
             "created_at": now,
         })
         _write_json("snapshots.json", snapshots)
+
+        audit_log.log_action(AUDIT_LOG_PATH, "balance_updated", f"{balance:.2f} €")
 
         return redirect(request.referrer or "/?v=balance-updated")
