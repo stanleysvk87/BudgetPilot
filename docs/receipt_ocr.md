@@ -1,43 +1,59 @@
-# Receipt OCR (future, optional)
+# Receipt OCR
 
-This documents an extension point that exists in the code but is **not
-implemented**. No OCR engine is installed, called, or planned to run in
-this slice.
+Optional, local/offline receipt scanning: photograph a receipt, get a
+rough amount/date/merchant guess, review and correct it, then it's saved
+as a normal expense. Manual entry remains the primary and fastest way to
+log an expense — OCR is just an alternate input source for the same
+`data/expenses.json` shape.
 
-## Status
+## How it works
 
-- `receipts.py` contains only placeholder functions
-  (`parse_receipt_placeholder()`, `create_expense_from_receipt_result()`).
-  Neither reads an image file nor calls any OCR library or external
-  service.
-- Expenses in `data/expenses.json` may carry a `source` field
-  (`"manual"` / `"ocr"` / `"import"`), defaulting to `"manual"`. Optional
-  receipt metadata (`receipt_id`, `merchant`, `original_image_path`,
-  `ocr_confidence`, `ocr_raw_text`, `needs_review`) is supported by the
-  data model but not required and not currently written by anything.
-- There is no OCR UI. Photo upload is not implemented.
+1. Upload a photo via the "Účtenka (foto)" form in the web dashboard
+   (`POST /receipt/upload`). On a phone, `capture="environment"` opens the
+   camera directly. The image is saved to `data/receipts/<id>.<ext>`.
+2. `receipts.parse_receipt()` runs local Tesseract OCR (via `pytesseract`)
+   over the image and extracts a best-guess amount (the largest
+   amount-shaped number, preferring a line with "spolu"/"celkom"/"total"),
+   date (`DD.MM.YYYY` or `YYYY-MM-DD` pattern), and merchant (first
+   non-blank OCR line). This is a rough heuristic, not a real model — it
+   is never trusted directly.
+3. The dashboard shows a "Potvrdiť účtenku" review form pre-filled with
+   the guess. The user must review and correct the amount/date/category
+   before saving — see `create_expense_from_receipt_result()`, which only
+   ever writes the user-confirmed values (`confirmed`), never the raw OCR
+   guess (`receipt_result`) straight through.
+4. On confirm (`POST /receipt/confirm`), the result is saved as a normal
+   expense with `source: "ocr"` — same shape, same forecast rules, same
+   dashboard as a manually typed expense. OCR never saves anything
+   automatically; confirmation is mandatory every time.
 
-## Intended future direction
+## Local, offline only
 
-Manual entry is, and will remain, the primary and fastest way to log an
-expense. OCR is meant to be an **optional input source for manual
-expenses**, not a separate accounting system:
+OCR runs entirely on-device via the system `tesseract` binary — no cloud
+call, no external API, consistent with this project's "no bank
+integration, no AI, no cloud sync" stance. If `pytesseract`/`Pillow`
+aren't installed, or the `tesseract` binary is missing, `parse_receipt()`
+falls back to `parse_receipt_placeholder()` (empty guess, still
+`needs_review: True`) instead of crashing — manual expense entry keeps
+working either way.
 
-1. User uploads or photographs a receipt.
-2. OCR (not yet implemented) attempts to extract total amount, date, and
-   possibly the merchant, via `parse_receipt_placeholder()` or its real
-   successor.
-3. The user must review and confirm or correct the amount, date, and
-   category, and may edit the note/merchant, before anything is saved —
-   see `create_expense_from_receipt_result()`, which only ever writes the
-   user-confirmed values, never the raw OCR guess.
-4. Once confirmed, the result is saved as a normal expense
-   (`source: "ocr"`) — same shape, same forecast rules, same dashboard as
-   a manually typed expense.
+## Installing the OCR dependencies
 
-OCR must never save an expense automatically. Confirmation is mandatory,
-every time.
+```bash
+sudo apt install tesseract-ocr tesseract-ocr-slk   # system binary + Slovak language pack
+pip install -r requirements.txt                     # pytesseract, Pillow
+```
 
-When BudgetPilot is deployed on the Orange Pi server, local/NPU-accelerated
-OCR processing may be considered — this is out of scope for now and has
-no code or dependencies in this repo yet.
+Without this, the web UI's upload form still works, it just won't extract
+anything — the review form opens with empty amount/date fields for you to
+fill in by hand.
+
+## Data model
+
+Expenses may carry: `source` (`"manual"` / `"ocr"` / `"import"`,
+default `"manual"`), `receipt_id`, `merchant`, `original_image_path`,
+`ocr_confidence`, `ocr_raw_text`, `needs_review`. All optional — only
+`source`/`receipt_id`/`merchant`/`original_image_path` are actually
+written by the current upload flow (confidence/raw_text are supported by
+`create_expense_from_receipt_result()` but not currently passed through
+from the web form, to keep the review form and redirect URL short).

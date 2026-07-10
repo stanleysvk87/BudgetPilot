@@ -1,0 +1,13 @@
+[Unit]
+Description=BudgetPilot web dashboard
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/BudgetPilot
+ExecStart=%h/BudgetPilot/.venv/bin/python3 %h/BudgetPilot/budgetpilot_web.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

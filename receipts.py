@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
-"""Placeholder boundary for a future, optional receipt-OCR feature.
+"""Receipt-OCR boundary: an optional, local/offline extraction pass over
+a receipt photo, with a hard rule that its guess is never trusted
+directly. See docs/receipt_ocr.md for the full picture.
 
-No OCR engine is implemented or called anywhere in this module — it only
-defines the shape a future OCR pass would produce, and the one path by
-which that result is allowed to become a real expense: through explicit
-user confirmation. See docs/receipt_ocr.md for the full picture.
+OCR runs entirely on-device via Tesseract (through pytesseract) — no
+cloud call, no external service, consistent with this project's "no
+bank integration, no AI, no cloud sync" stance. If pytesseract or the
+tesseract binary isn't installed, parse_receipt() falls back to the
+inert placeholder rather than crashing, so a server without the system
+package still works for manual expense entry.
 """
+import re
+from datetime import date
 
 SOURCE_MANUAL = "manual"
 SOURCE_OCR = "ocr"
@@ -13,13 +19,17 @@ SOURCE_IMPORT = "import"
 
 VALID_SOURCES = {SOURCE_MANUAL, SOURCE_OCR, SOURCE_IMPORT}
 
+_AMOUNT_RE = re.compile(r"(\d{1,4}[.,]\d{2})\b")
+_TOTAL_KEYWORDS = ("spolu", "celkom", "total", "suma", "k úhrade", "k uhrade")
+_DATE_DMY_RE = re.compile(r"\b(\d{2})[.\-/](\d{2})[.\-/](\d{4})\b")
+_DATE_YMD_RE = re.compile(r"\b(\d{4})-(\d{2})-(\d{2})\b")
+
 
 def parse_receipt_placeholder(image_path):
-    """Stand-in for a future OCR call.
-
-    Does not open image_path or run any OCR engine. Always returns a
-    result flagged needs_review=True, since nothing has actually been
-    extracted or verified yet.
+    """Stand-in for an OCR call — always returns an empty, needs_review
+    result. Used directly when OCR is unavailable, and by parse_receipt()
+    itself as its fallback on any failure (missing dependency, unreadable
+    image, tesseract error).
     """
     return {
         "amount": None,
@@ -28,6 +38,105 @@ def parse_receipt_placeholder(image_path):
         "raw_text": None,
         "confidence": 0.0,
         "image_path": image_path,
+        "needs_review": True,
+    }
+
+
+def _extract_amount(raw_text):
+    """Best-guess total from OCR'd receipt text: the largest amount-shaped
+    number, preferring a line that looks like a total/summary line. Purely
+    heuristic — receipts.py's caller must always treat this as a starting
+    guess for the user to correct, never as a fact.
+    """
+    if not raw_text:
+        return None
+    candidates = []
+    for line in raw_text.splitlines():
+        is_total_line = any(k in line.lower() for k in _TOTAL_KEYWORDS)
+        for m in _AMOUNT_RE.finditer(line):
+            candidates.append((is_total_line, float(m.group(1).replace(",", "."))))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda c: (c[0], c[1]))
+    return candidates[-1][1]
+
+
+def _extract_date(raw_text):
+    """Best-guess date from OCR'd receipt text: the first DD.MM.YYYY (or
+    D-M-Y / D/M/Y) or YYYY-MM-DD pattern found. Same heuristic caveat as
+    _extract_amount."""
+    if not raw_text:
+        return None
+    m = _DATE_DMY_RE.search(raw_text)
+    if m:
+        d, mo, y = m.groups()
+        try:
+            return date(int(y), int(mo), int(d)).isoformat()
+        except ValueError:
+            pass
+    m = _DATE_YMD_RE.search(raw_text)
+    if m:
+        y, mo, d = m.groups()
+        try:
+            return date(int(y), int(mo), int(d)).isoformat()
+        except ValueError:
+            pass
+    return None
+
+
+def _extract_merchant(raw_text):
+    """First non-blank OCR line, on the (weak but usually true) assumption
+    that a receipt's header/logo line is its merchant name."""
+    if not raw_text:
+        return None
+    for line in raw_text.splitlines():
+        stripped = line.strip()
+        if stripped:
+            return stripped
+    return None
+
+
+def parse_receipt(image_path):
+    """Run local Tesseract OCR over a receipt image and extract a rough
+    amount/date/merchant guess from the raw text.
+
+    Falls back to parse_receipt_placeholder() — never raises — if
+    pytesseract/Pillow aren't installed, the image can't be opened, or
+    tesseract itself fails (including a missing Slovak language pack;
+    retries with English-only before giving up). needs_review is always
+    True: this function only ever produces a starting guess, matching the
+    hard rule in create_expense_from_receipt_result() that the saved
+    values always come from the user's confirmation, never straight from
+    here.
+    """
+    try:
+        import pytesseract
+        from PIL import Image
+    except ImportError:
+        return parse_receipt_placeholder(image_path)
+
+    try:
+        image = Image.open(image_path)
+    except Exception:
+        return parse_receipt_placeholder(image_path)
+
+    raw_text = None
+    for lang in ("slk+eng", "eng"):
+        try:
+            raw_text = pytesseract.image_to_string(image, lang=lang)
+            break
+        except Exception:
+            continue
+    if raw_text is None:
+        return parse_receipt_placeholder(image_path)
+
+    return {
+        "amount": _extract_amount(raw_text),
+        "date": _extract_date(raw_text),
+        "merchant": _extract_merchant(raw_text),
+        "raw_text": raw_text,
+        "confidence": 0.0,
+        "image_path": str(image_path),
         "needs_review": True,
     }
 

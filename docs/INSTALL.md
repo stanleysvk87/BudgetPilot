@@ -2,10 +2,17 @@
 
 ## Requirements
 
-- Python 3.10 or newer (developed and tested on 3.10.12)
+- Python 3.10 or newer (developed and tested on 3.10.12 and 3.11.2)
 - [Flask](https://flask.palletsprojects.com/) — only needed to run the web
   UI (`budgetpilot_web.py`); the CLI (`budgetpilot.py`) and the test suite
   use only the Python standard library.
+- `pytesseract` + `Pillow` — only needed for receipt-photo OCR (see
+  [receipt_ocr.md](receipt_ocr.md)). Without them the upload form still
+  works, it just won't extract anything — you fill the amount/date in by
+  hand on the review screen.
+- The system `tesseract` binary — only needed for OCR to actually extract
+  text (`pytesseract` is just a wrapper around it): `sudo apt install
+  tesseract-ocr tesseract-ocr-slk` on Debian/Ubuntu/Raspberry Pi OS.
 
 ## Install with a virtualenv (recommended)
 
@@ -13,13 +20,13 @@
 cd BudgetPilot
 python3 -m venv .venv
 source .venv/bin/activate
-pip install flask
+pip install -r requirements.txt
 ```
 
 ## Install without a virtualenv
 
 ```bash
-pip install --user flask
+pip install --user -r requirements.txt
 ```
 
 ## Running
@@ -32,9 +39,12 @@ python3 -m unittest discover -s tests   # tests
 
 ## Running on Linux as a background service
 
-There is no systemd unit shipped yet (see [ROADMAP.md](ROADMAP.md)). For now,
-run it in a terminal, `tmux`/`screen` session, or a simple `nohup python3
-budgetpilot_web.py &`.
+A user-level systemd unit is the recommended way to keep the web UI running
+persistently without root — see `deploy/budgetpilot.service` and
+`deploy/README.md` for a ready-to-copy unit file and setup steps
+(`systemctl --user enable --now budgetpilot.service`, with `loginctl
+enable-linger $USER` so it survives logout). Without that, a terminal,
+`tmux`/`screen` session, or `nohup python3 budgetpilot_web.py &` also work.
 
 ## Troubleshooting
 

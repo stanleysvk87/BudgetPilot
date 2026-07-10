@@ -18,12 +18,15 @@
 - Payday balance snapshot as source of truth for a new cycle
 - Payment-state UI: state selector + defer button per payment, reachable
   from the main dashboard
-- Manual expense log with a `source` field ready for a future OCR input
-  path
+- Receipt OCR — photo upload, local/offline Tesseract extraction (amount/
+  date/merchant guess), mandatory user review/confirm before saving as a
+  normal expense. See [receipt_ocr.md](receipt_ocr.md)
 - 58 unit tests (stdlib `unittest`), covering forecast, obligations, and
   the receipts placeholder
 - Mobile-friendly dashboard (viewport meta tag, horizontal table scroll),
   reachable over LAN
+- Orange Pi / systemd deployment — user-level service (no root needed),
+  see [../deploy/README.md](../deploy/README.md)
 
 ## Next up
 
@@ -32,14 +35,8 @@
 
 ## Later / exploratory
 
-- **Orange Pi / systemd deployment** — running `budgetpilot_web.py` as a
-  persistent home-server service instead of a manually started process.
 - **Optional Docker packaging** — for easier install on other machines;
   not needed for the current single-Python-file deployment model.
-- **Optional OCR** — receipt photo → extracted amount/date/merchant → user
-  confirms before saving as a normal manual expense. Manual entry stays the
-  primary path always. See [receipt_ocr.md](receipt_ocr.md) — currently
-  zero implementation, placeholder extension points only.
 - **Possible public release** — this documentation pass is preparation for
   that, not the release itself. No bank integration, AI, authentication, or
   cloud sync is planned before or after a public release.

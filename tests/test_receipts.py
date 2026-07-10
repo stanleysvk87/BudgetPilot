@@ -25,6 +25,80 @@ class ParseReceiptPlaceholderTests(unittest.TestCase):
         self.assertTrue(result["needs_review"])
 
 
+class ExtractAmountTests(unittest.TestCase):
+    def test_prefers_a_total_labeled_line(self):
+        raw_text = "Chlieb 1,20\nMlieko 0,95\nSPOLU 42,50"
+        self.assertEqual(rc._extract_amount(raw_text), 42.50)
+
+    def test_falls_back_to_largest_amount_when_no_total_line(self):
+        raw_text = "Chlieb 1,20\nMlieko 0,95"
+        self.assertEqual(rc._extract_amount(raw_text), 1.20)
+
+    def test_dot_decimal_also_matches(self):
+        raw_text = "TOTAL 12.34"
+        self.assertEqual(rc._extract_amount(raw_text), 12.34)
+
+    def test_no_amount_shaped_number_returns_none(self):
+        self.assertIsNone(rc._extract_amount("ďakujeme za nákup"))
+
+    def test_empty_text_returns_none(self):
+        self.assertIsNone(rc._extract_amount(""))
+        self.assertIsNone(rc._extract_amount(None))
+
+
+class ExtractDateTests(unittest.TestCase):
+    def test_dmy_dotted_format(self):
+        self.assertEqual(rc._extract_date("Dátum: 09.07.2026"), "2026-07-09")
+
+    def test_ymd_dashed_format(self):
+        self.assertEqual(rc._extract_date("2026-07-09 12:30"), "2026-07-09")
+
+    def test_no_date_returns_none(self):
+        self.assertIsNone(rc._extract_date("ďakujeme za nákup"))
+
+    def test_invalid_calendar_date_is_rejected_not_crashed(self):
+        self.assertIsNone(rc._extract_date("99.99.9999"))
+
+    def test_empty_text_returns_none(self):
+        self.assertIsNone(rc._extract_date(""))
+        self.assertIsNone(rc._extract_date(None))
+
+
+class ExtractMerchantTests(unittest.TestCase):
+    def test_first_nonblank_line(self):
+        self.assertEqual(rc._extract_merchant("\n\nTESCO STORES\nHlavná 1"), "TESCO STORES")
+
+    def test_empty_text_returns_none(self):
+        self.assertIsNone(rc._extract_merchant(""))
+        self.assertIsNone(rc._extract_merchant(None))
+
+
+class ParseReceiptFallbackTests(unittest.TestCase):
+    """parse_receipt() must degrade to the inert placeholder — never raise
+    — whenever OCR isn't actually usable (missing dependency, unreadable
+    image, tesseract failure), so a server without tesseract installed
+    doesn't break manual expense entry. A nonexistent image path exercises
+    this regardless of whether pytesseract itself is installed, since
+    Image.open() fails first either way — this environment currently has
+    no pytesseract installed at all, which the next test pins."""
+
+    def test_nonexistent_image_falls_back_to_placeholder(self):
+        result = rc.parse_receipt("/tmp/does-not-exist.jpg")
+        self.assertIsNone(result["amount"])
+        self.assertTrue(result["needs_review"])
+
+    def test_missing_pytesseract_dependency_falls_back_to_placeholder(self):
+        try:
+            import pytesseract  # noqa: F401
+        except ImportError:
+            pass
+        else:
+            self.skipTest("pytesseract is installed in this environment")
+        result = rc.parse_receipt(__file__)  # a real, readable file
+        self.assertIsNone(result["amount"])
+        self.assertTrue(result["needs_review"])
+
+
 class CreateExpenseFromReceiptResultTests(unittest.TestCase):
     def test_saved_expense_uses_confirmed_values_not_raw_ocr_guess(self):
         receipt_result = {"amount": 999.99, "merchant": "Ignored Store", "confidence": 0.1}

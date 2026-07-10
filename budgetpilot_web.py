@@ -4,6 +4,7 @@ import subprocess
 import uuid
 from pathlib import Path
 from datetime import date
+from urllib.parse import urlencode
 from flask import Flask, request, redirect, render_template_string
 
 import obligations as ob
@@ -22,6 +23,7 @@ SNAPSHOTS = DATA / "snapshots.json"
 ENVELOPES = DATA / "envelopes.json"
 DEBTS = DATA / "debts.json"
 ONETIME = DATA / "onetime.json"
+RECEIPTS_DIR = DATA / "receipts"
 
 PRIORITY_LABEL = {
     "mandatory": "nevyhnutná",
@@ -337,6 +339,37 @@ details.card summary{cursor:pointer;font-size:20px;font-weight:700}
 </div>
 
 <div class="card">
+<h2>Účtenka (foto)</h2>
+<form method="post" action="/receipt/upload" enctype="multipart/form-data">
+<label>Fotka účtenky</label>
+<input type="file" name="image" accept="image/*" capture="environment" required>
+<div class="small">Rozpozná sumu/dátum ako odhad — vždy si to pred uložením skontroluješ a potvrdíš.</div>
+<div class="btn-row"><button>Nahrať a rozpoznať</button></div>
+</form>
+</div>
+
+{% if receipt_review %}
+<div class="card" style="border-color:var(--orange)">
+<h2>Potvrdiť účtenku</h2>
+<div class="small">Odhad z OCR — over si sumu a dátum, priradí sa kategória, a až potom sa uloží ako výdavok.</div>
+<form method="post" action="/receipt/confirm">
+<input type="hidden" name="receipt_id" value="{{receipt_review.receipt_id}}">
+<input type="hidden" name="image_path" value="{{receipt_review.image_path}}">
+<input type="hidden" name="merchant" value="{{receipt_review.merchant or ''}}">
+<label>Kategória</label>
+<select name="name">{% for t in expense_types %}<option {% if t=='Iné' %}selected{% endif %}>{{t}}</option>{% endfor %}</select>
+<label>Suma</label><input name="amount" value="{{receipt_review.amount or ''}}" placeholder="skontroluj sumu">
+<label>Dátum</label><input name="date" value="{{receipt_review.date or today}}">
+{% if receipt_review.merchant %}<div class="small">Rozpoznané: {{receipt_review.merchant}}</div>{% endif %}
+<div class="btn-row">
+<button>Uložiť výdavok</button>
+<a href="/"><button type="button" class="secondary">Zahodiť</button></a>
+</div>
+</form>
+</div>
+{% endif %}
+
+<div class="card">
 <h2>Obálka (mesačný limit)</h2>
 <form method="post" action="/envelope/add">
 <label>Kategória</label>
@@ -513,7 +546,7 @@ details.card summary{cursor:pointer;font-size:20px;font-weight:700}
 <div class="table-scroll">
 <table><tr><th>Názov</th><th>Suma</th><th>Dátum</th><th></th></tr>
 {% for x in expenses %}
-<tr><td>{{x.get('name')}}</td><td>{{x.get('amount')}} €</td><td>{{x.get('date')}}</td>
+<tr><td>{{x.get('name')}}{% if x.get('source')=='ocr' %} <span class="badge">OCR{% if x.get('merchant') %}: {{x.merchant}}{% endif %}</span>{% endif %}</td><td>{{x.get('amount')}} €</td><td>{{x.get('date')}}</td>
 <td class="actions">
 <form method="get" action="/edit/expense/{{loop.index0}}"><button class="secondary">Upraviť</button></form>
 <form method="post" action="/expense/delete/{{loop.index0}}"><button class="danger">Zmazať</button></form>
@@ -673,6 +706,17 @@ def render_page(edit_income=None, edit_payment=None, edit_expense=None):
     if edit_expense is not None and edit_expense < len(expenses):
         expense_form = expenses[edit_expense]
 
+    receipt_review = None
+    if request.args.get("review_receipt"):
+        amount_raw = request.args.get("guess_amount", "")
+        receipt_review = {
+            "receipt_id": request.args.get("review_receipt"),
+            "image_path": request.args.get("image_path", ""),
+            "amount": float(amount_raw) if amount_raw else None,
+            "date": request.args.get("guess_date") or None,
+            "merchant": request.args.get("guess_merchant") or None,
+        }
+
     return render_template_string(
         HTML,
         settings=settings, incomes=incomes, payments=payments, expenses=expenses,
@@ -692,6 +736,7 @@ def render_page(edit_income=None, edit_payment=None, edit_expense=None):
         debt_states_by_direction=DEBT_STATES_BY_DIRECTION,
         debt_direction_label=DEBT_DIRECTION_LABEL,
         onetime_resolved=onetime_resolved, priority_label=PRIORITY_LABEL,
+        receipt_review=receipt_review,
     )
 
 @app.route("/")
@@ -960,6 +1005,53 @@ def onetime_delete(i):
     data = load(ONETIME, [])
     if i < len(data): data.pop(i)
     save(ONETIME, data)
+    return go_home()
+
+@app.post("/receipt/upload")
+def receipt_upload():
+    file = request.files.get("image")
+    if not file or not file.filename:
+        return go_home()
+
+    RECEIPTS_DIR.mkdir(parents=True, exist_ok=True)
+    receipt_id = uuid.uuid4().hex[:12]
+    ext = Path(file.filename).suffix or ".jpg"
+    image_path = RECEIPTS_DIR / f"{receipt_id}{ext}"
+    file.save(image_path)
+
+    result = receipts.parse_receipt(image_path)
+    params = {"review_receipt": receipt_id, "image_path": str(image_path)}
+    if result.get("amount") is not None:
+        params["guess_amount"] = result["amount"]
+    if result.get("date"):
+        params["guess_date"] = result["date"]
+    if result.get("merchant"):
+        params["guess_merchant"] = result["merchant"]
+    return redirect(f"/?{urlencode(params)}")
+
+@app.post("/receipt/confirm")
+def receipt_confirm():
+    amount = request.form.get("amount", "").strip()
+    if not amount:
+        return go_home()
+    # receipt_result only carries what the review form actually round-tripped
+    # (merchant, image_path) — create_expense_from_receipt_result() only
+    # ever uses `confirmed` for the values that matter (amount/date/name).
+    receipt_result = {
+        "merchant": request.form.get("merchant") or None,
+        "image_path": request.form.get("image_path") or None,
+    }
+    confirmed = {
+        "name": request.form.get("name", "Iné"),
+        "amount": float(amount),
+        "date": request.form.get("date", date.today().isoformat()),
+    }
+    expense = receipts.create_expense_from_receipt_result(
+        receipt_result, confirmed, receipt_id=request.form.get("receipt_id") or None
+    )
+    data = load(EXPENSES, [])
+    data.append(expense)
+    save(EXPENSES, data)
     return go_home()
 
 SETUP_HTML = """
