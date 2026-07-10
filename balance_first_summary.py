@@ -4,7 +4,7 @@ from __future__ import annotations
 import calendar
 import json
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from flask import jsonify, redirect, request
@@ -381,6 +381,23 @@ def build_balance_first_summary() -> dict:
     after_payments = balance - unpaid_total
     after_all = balance - unpaid_total - envelope_remaining_total
 
+    # Dashboard-summary-only fields (docs/navigation_layout.md): counts and
+    # top-N previews so the dashboard never needs the full unpaid/deferred
+    # lists itself -- those live on /payments and /deferred.
+    soon_cutoff = (date.today() + timedelta(days=3)).isoformat()
+    due_soon_count = sum(
+        1 for item in unpaid_items
+        if not item["overdue"] and item["due_date"] <= soon_cutoff
+    )
+    deferred_sorted = sorted(deferred_items, key=lambda item: item.get("deferred_to") or "9999-99-99")
+    next_deferred_item = deferred_sorted[0] if deferred_sorted else None
+    top_deferred_items = deferred_sorted[:3]
+    # DATA / "audit_log.json" computed fresh (not the module-level
+    # AUDIT_LOG_PATH constant) so this stays correct when DATA is patched
+    # to an isolated dir in tests, matching every other _read_json() call
+    # in this function.
+    recent_activity = list(reversed(audit_log.load_audit_log(DATA / "audit_log.json")))[:5]
+
     return {
         "cycle": cycle,
         "today": today,
@@ -410,6 +427,15 @@ def build_balance_first_summary() -> dict:
         "unpaid_payment_items": unpaid_items,
         "deferred_payment_items": deferred_items,
         "envelope_items": envelope_items,
+
+        # Dashboard-summary aliases/additions -- additive only, existing
+        # fields above are unchanged so current consumers keep working.
+        "unpaid_count": len(unpaid_items),
+        "deferred_count": len(deferred_items),
+        "due_soon_count": due_soon_count,
+        "next_deferred_item": next_deferred_item,
+        "top_deferred_items": top_deferred_items,
+        "recent_activity": recent_activity,
     }
 
 

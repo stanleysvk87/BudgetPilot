@@ -4,6 +4,7 @@ import subprocess
 import uuid
 from pathlib import Path
 from datetime import date
+from urllib.parse import urlparse
 from flask import Flask, request, redirect, render_template_string
 
 import obligations as ob
@@ -129,6 +130,15 @@ def save(path, data):
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False))
 
 def go_home():
+    """Return to whichever view the action was submitted from (e.g. an
+    envelope edit on /envelopes redirects back to /envelopes, not the
+    dashboard), falling back to / when there's no usable referrer. Only
+    ever redirects to a local path — never follows an external referrer."""
+    ref = request.referrer
+    if ref:
+        path = urlparse(ref).path
+        if path.startswith("/"):
+            return redirect(path)
     return redirect("/")
 
 def run_core(args=None):
@@ -268,7 +278,8 @@ body{background:radial-gradient(circle at top left,#1e3a8a 0,#0f172a 34%,#020617
   background:transparent;border:1px solid transparent
 }
 .topnav a:hover{background:rgba(37,99,235,.18);border-color:rgba(96,165,250,.25)}
-.topnav a:first-of-type{background:rgba(37,99,235,.28);border-color:rgba(96,165,250,.35)}
+.topnav a.active{background:rgba(37,99,235,.32);border-color:rgba(96,165,250,.4);font-weight:800}
+.bottomnav{display:none}
 .app{margin-left:250px;padding:20px;display:flex;flex-direction:column;gap:16px}
 .main{order:1}
 .sidebar{order:2;display:grid;grid-template-columns:repeat(2,minmax(260px,1fr));gap:14px}
@@ -320,6 +331,19 @@ body{background:radial-gradient(circle at top left,#1e3a8a 0,#0f172a 34%,#020617
   .quick-actions{display:grid;grid-template-columns:1fr 1fr;gap:7px}
   .quick-actions button{width:100%;font-size:13px;padding:10px 8px}
   .actions-stack>form[action*="/payment/state/"], .actions-stack>form[action*="/onetime/state/"]{display:none}
+  .bottomnav{
+    display:flex;position:fixed;left:0;right:0;bottom:0;z-index:55;
+    background:rgba(2,6,23,.97);border-top:1px solid rgba(148,163,184,.2);
+    box-shadow:0 -10px 30px rgba(0,0,0,.35);padding:6px 4px calc(6px + env(safe-area-inset-bottom));
+  }
+  .bottomnav a{
+    flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;
+    padding:8px 2px;border-radius:12px;font-size:11px;color:var(--muted);
+    min-height:52px;justify-content:center;
+  }
+  .bottomnav a.active{color:var(--text);background:rgba(37,99,235,.22)}
+  .bottomnav .bn-icon{font-size:19px;line-height:1}
+  body{padding-bottom:74px}
   .sidebar{display:flex;flex-direction:column}
 }
 
@@ -488,6 +512,28 @@ details.safety-review-group[open] summary.safety-review-group-title::before{cont
 .defer-quick-row{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
 button.tiny.defer-quick{padding:6px 9px;font-size:11px;border-radius:999px;background:rgba(148,163,184,.2);color:#e2e8f0;border:0;cursor:pointer}
 .defer-form .btn-row{margin-top:0}
+
+/* Dashboard summary cards -- short overview only, full lists live in their own views */
+.summary-card h2{margin-bottom:10px}
+.summary-card .btn-row,.summary-card>a{margin-top:12px;display:block}
+.summary-card>a button{width:100%}
+.summary-stats{display:flex;flex-wrap:wrap;gap:14px;margin-bottom:6px}
+.summary-stats .stat{min-width:70px}
+.summary-stats .stat-value{font-size:22px;font-weight:900}
+.summary-stats .stat-value.bad{color:var(--red)}
+.summary-stats .stat-value.warn{color:var(--orange)}
+.summary-stats .stat-label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.deferred-mini-list,.deferred-detail-list{display:flex;flex-direction:column;gap:6px;margin-top:8px}
+.deferred-mini-row{display:flex;justify-content:space-between;gap:10px;font-size:13px;padding:6px 0;border-bottom:1px solid rgba(148,163,184,.12)}
+.deferred-mini-row:last-child{border-bottom:0}
+.deferred-summary{border-left:4px solid #b45309;background:linear-gradient(160deg,rgba(120,53,15,.16),rgba(31,41,55,.92))}
+.envelopes-summary-dashboard{border-left:4px solid #0f766e}
+.payments-summary{border-left:4px solid #2563eb}
+.activity-summary{border-left:4px solid #64748b}
+.deferred-detail-row{border:1px solid rgba(148,163,184,.18);background:rgba(2,6,23,.4);border-radius:14px;padding:12px 14px}
+.deferred-detail-row.overdue{border-color:rgba(239,68,68,.7);background:rgba(127,29,29,.22)}
+.deferred-detail-head{display:flex;justify-content:space-between;gap:10px;font-weight:800;margin-bottom:4px}
+.deferred-detail-row .pay-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
 .envelope-edit-row{
   display:grid;
   grid-template-columns:1fr 1fr;
@@ -646,6 +692,7 @@ button.tiny.defer-quick{padding:6px 9px;font-size:11px;border-radius:999px;backg
 <button type="button" class="tiny defer-quick" data-quick="7d">+7 dní</button>
 <button type="button" class="tiny defer-quick" data-quick="next_month">ďalší mesiac</button>
 <button type="button" class="tiny defer-quick" data-quick="end_month">koniec mesiaca</button>
+<button type="button" class="tiny defer-quick" data-quick="today">Vrátiť medzi aktuálne</button>
 </div>
 <div class="btn-row">
 <button type="submit" class="secondary">Potvrdiť odklad</button>
@@ -654,27 +701,51 @@ button.tiny.defer-quick{padding:6px 9px;font-size:11px;border-radius:999px;backg
 </form>
 </div>
 {% endmacro %}
+{% macro unpaid_rows(items) %}
+<div class="table-scroll">
+<table><tr><th>Názov</th><th>Suma</th><th>Termín</th><th>Priorita</th><th>Naliehavosť</th><th></th></tr>
+{% for p in items %}
+<tr data-payment-id="{{p.get('id','')}}" data-cycle-key="{{p.get('origin_cycle_key', cycle_key)}}">
+<td>{{p.name}}{% if p.get('carryover_label') %}<br><span class="small">{{p.carryover_label}}</span>{% endif %}</td>
+<td>{{p.amount}} €</td><td>{{p.due_date}}</td><td>{{p.get('priority','-')}}</td>
+<td class="urgency-{{p.urgency}}">{{urgency_label_sk.get(p.urgency, p.urgency)}}</td>
+<td class="actions-stack">
+{{ paid_button(p.get('id',''), p.get('origin_cycle_key', cycle_key)) }}
+{{ defer_widget(p.get('id',''), p.get('origin_cycle_key', cycle_key), '↷ Odložiť') }}
+{{ state_form(p.get('id',''), p.get('origin_cycle_key', cycle_key), selectable_states, state_label) }}
+</td></tr>
+{% endfor %}
+</table>
+</div>
+{% endmacro %}
+<script>window.BP_ACTIVE_VIEW = "{{active_view}}";</script>
 <nav class="topnav" id="appDrawer">
 <span class="brand">BudgetPilot</span>
-<a href="#overview">Prehľad</a>
-<a href="#payments">Platby</a>
-<a href="#expenses">Výdavky</a>
-<a href="#settings">Nastavenia</a>
-<a href="#envelopes">Obálky</a>
-<a href="#debts">Dlhy</a>
-<a href="#onetime">Jednorazové</a>
-<a href="#forecast3m">Výhľad</a>
-<span class="navlink disabled">Kalendár (čoskoro)</span>
+<a href="/" class="{% if active_view=='dashboard' %}active{% endif %}">Prehľad</a>
+<a href="/payments" class="{% if active_view=='payments' %}active{% endif %}">Platby</a>
+<a href="/deferred" class="{% if active_view=='deferred' %}active{% endif %}">Odložené</a>
+<a href="/envelopes" class="{% if active_view=='envelopes' %}active{% endif %}">Obálky</a>
+<a href="/expenses" class="{% if active_view=='expenses' %}active{% endif %}">Výdavky</a>
+<a href="/receipts" class="{% if active_view=='receipts' %}active{% endif %}">OCR</a>
+<a href="/history" class="{% if active_view=='history' %}active{% endif %}">História</a>
+<a href="/settings" class="{% if active_view=='settings' %}active{% endif %}">Nastavenia</a>
+</nav>
+<nav class="bottomnav">
+<a href="/" class="{% if active_view=='dashboard' %}active{% endif %}"><span class="bn-icon">🏠</span>Prehľad</a>
+<a href="/payments" class="{% if active_view=='payments' %}active{% endif %}"><span class="bn-icon">🧾</span>Platby</a>
+<a href="/deferred" class="{% if active_view=='deferred' %}active{% endif %}"><span class="bn-icon">↷</span>Odložené</a>
+<a href="/envelopes" class="{% if active_view=='envelopes' %}active{% endif %}"><span class="bn-icon">✉</span>Obálky</a>
+<a href="/receipts" class="{% if active_view=='receipts' %}active{% endif %}"><span class="bn-icon">📷</span>OCR</a>
 </nav>
 <div class="app">
 
 <aside class="sidebar">
-<div class="card" id="settings">
+<div class="card">
 <h1>BudgetPilot</h1>
 <div class="small">Hrubá pravda o mesiaci. Bez AI, bez blbostí.</div>
 </div>
 
-{% if setup_needed %}
+{% if setup_needed and active_view == 'dashboard' %}
 <div class="card" style="border-color:var(--orange)">
 <h2>⚠️ Dokonči nastavenie</h2>
 <div class="small">Chýba deň výplaty alebo reálny zostatok k dnešnému dňu.</div>
@@ -682,6 +753,7 @@ button.tiny.defer-quick{padding:6px 9px;font-size:11px;border-radius:999px;backg
 </div>
 {% endif %}
 
+{% if active_view == 'settings' %}
 <div class="card">
 <h2>Účet + rezerva</h2>
 <form method="post" action="/settings">
@@ -703,11 +775,13 @@ button.tiny.defer-quick{padding:6px 9px;font-size:11px;border-radius:999px;backg
 <label>Deň v mesiaci</label><input name="day" value="{{income_form.get('day','15')}}">
 <div class="btn-row">
 <button>{% if edit_income is not none %}Uložiť úpravu{% else %}Pridať príjem{% endif %}</button>
-{% if edit_income is not none %}<a href="/"><button type="button" class="secondary">Zrušiť</button></a>{% endif %}
+{% if edit_income is not none %}<a href="/settings"><button type="button" class="secondary">Zrušiť</button></a>{% endif %}
 </div>
 </form>
 </div>
+{% endif %}
 
+{% if active_view == 'payments' %}
 <div class="card">
 <h2>{% if edit_payment is not none %}Upraviť platbu{% else %}Pravidelná platba{% endif %}</h2>
 <form method="post" action="{% if edit_payment is not none %}/payment/update/{{edit_payment}}{% else %}/payment/add{% endif %}">
@@ -729,7 +803,7 @@ button.tiny.defer-quick{padding:6px 9px;font-size:11px;border-radius:999px;backg
 <label>Ak vlastné: každých X mesiacov</label><input name="every_months" value="{{payment_form.every_months}}" placeholder="napr. 24">
 <div class="btn-row">
 <button>{% if edit_payment is not none %}Uložiť úpravu{% else %}Pridať platbu{% endif %}</button>
-{% if edit_payment is not none %}<a href="/"><button type="button" class="secondary">Zrušiť</button></a>{% endif %}
+{% if edit_payment is not none %}<a href="/payments"><button type="button" class="secondary">Zrušiť</button></a>{% endif %}
 </div>
 </form>
 </div>
@@ -746,6 +820,23 @@ button.tiny.defer-quick{padding:6px 9px;font-size:11px;border-radius:999px;backg
 </form>
 </div>
 
+<div class="card">
+<h2>Dlh</h2>
+<form method="post" action="/debt/add">
+<label>Názov / komu-od koho</label><input name="name" placeholder="napr. Peter, pôžička na auto">
+<label>Suma</label><input name="amount" placeholder="napr. 300">
+<label>Smer</label>
+<select name="direction">
+{% for d, label in debt_direction_label.items() %}<option value="{{d}}">{{label}}</option>{% endfor %}
+</select>
+<label>Termín splatnosti</label><input name="due_date" value="{{today}}">
+<label>Poznámka</label><input name="note" placeholder="voliteľné">
+<div class="btn-row"><button>Pridať dlh</button></div>
+</form>
+</div>
+{% endif %}
+
+{% if active_view == 'expenses' %}
 <div class="card" id="expense-quick">
 <h2>Rýchly výdavok</h2>
 <form method="post" action="/expense/add">
@@ -766,11 +857,13 @@ button.tiny.defer-quick{padding:6px 9px;font-size:11px;border-radius:999px;backg
 <label>Dátum</label><input name="date" value="{{expense_form.date}}">
 <div class="btn-row">
 <button>{% if edit_expense is not none %}Uložiť úpravu{% else %}Pridať výdavok{% endif %}</button>
-{% if edit_expense is not none %}<a href="/"><button type="button" class="secondary">Zrušiť</button></a>{% endif %}
+{% if edit_expense is not none %}<a href="/expenses"><button type="button" class="secondary">Zrušiť</button></a>{% endif %}
 </div>
 </form>
 </div>
+{% endif %}
 
+{% if active_view == 'receipts' %}
 <div class="card">
 <h2>Účtenka (foto)</h2>
 <form method="post" action="/receipt/upload" enctype="multipart/form-data">
@@ -807,12 +900,14 @@ button.tiny.defer-quick{padding:6px 9px;font-size:11px;border-radius:999px;backg
 <label>Dátum</label><input name="date" value="{{receipt_review.date or today}}">
 <div class="btn-row">
 <button>Uložiť výdavok</button>
-<a href="/"><button type="button" class="secondary">Zahodiť</button></a>
+<a href="/receipts"><button type="button" class="secondary">Zahodiť</button></a>
 </div>
 </form>
 </div>
 {% endif %}
+{% endif %}
 
+{% if active_view == 'envelopes' %}
 <div class="card">
 <h2>Obálka (mesačný limit)</h2>
 <form method="post" action="/envelope/add">
@@ -823,21 +918,7 @@ button.tiny.defer-quick{padding:6px 9px;font-size:11px;border-radius:999px;backg
 <div class="btn-row"><button>Uložiť obálku</button></div>
 </form>
 </div>
-
-<div class="card">
-<h2>Dlh</h2>
-<form method="post" action="/debt/add">
-<label>Názov / komu-od koho</label><input name="name" placeholder="napr. Peter, pôžička na auto">
-<label>Suma</label><input name="amount" placeholder="napr. 300">
-<label>Smer</label>
-<select name="direction">
-{% for d, label in debt_direction_label.items() %}<option value="{{d}}">{{label}}</option>{% endfor %}
-</select>
-<label>Termín splatnosti</label><input name="due_date" value="{{today}}">
-<label>Poznámka</label><input name="note" placeholder="voliteľné">
-<div class="btn-row"><button>Pridať dlh</button></div>
-</form>
-</div>
+{% endif %}
 </aside>
 
 <main class="main" id="overview">
@@ -871,45 +952,74 @@ button.tiny.defer-quick{padding:6px 9px;font-size:11px;border-radius:999px;backg
 </div>
 </div>
 
-<div class="card section">
-<h2>Nezaplatené / treba zaplatiť</h2>
-{% if unpaid %}
-<div class="table-scroll">
-<table><tr><th>Názov</th><th>Suma</th><th>Termín</th><th>Priorita</th><th>Naliehavosť</th><th></th></tr>
-{% for p in unpaid %}
-<tr data-payment-id="{{p.get('id','')}}" data-cycle-key="{{p.get('origin_cycle_key', cycle_key)}}">
-<td>{{p.name}}{% if p.get('carryover_label') %}<br><span class="small">{{p.carryover_label}}</span>{% endif %}</td>
-<td>{{p.amount}} €</td><td>{{p.due_date}}</td><td>{{p.get('priority','-')}}</td>
-<td class="urgency-{{p.urgency}}">{{urgency_label_sk.get(p.urgency, p.urgency)}}</td>
-<td class="actions-stack">
-{{ paid_button(p.get('id',''), p.get('origin_cycle_key', cycle_key)) }}
-{{ defer_widget(p.get('id',''), p.get('origin_cycle_key', cycle_key), '↷ Odložiť') }}
-{{ state_form(p.get('id',''), p.get('origin_cycle_key', cycle_key), selectable_states, state_label) }}
-</td></tr>
-{% endfor %}
-</table>
+{% if active_view == 'dashboard' %}
+<div class="card summary-card payments-summary">
+<h2>🧾 Platby</h2>
+<div class="summary-stats">
+<div class="stat"><div class="stat-value">{{unpaid|length}}</div><div class="stat-label">nezaplatené</div></div>
+<div class="stat"><div class="stat-value {% if unpaid_overdue|length %}bad{% endif %}">{{unpaid_overdue|length}}</div><div class="stat-label">po splatnosti</div></div>
+<div class="stat"><div class="stat-value {% if unpaid_soon|length %}warn{% endif %}">{{unpaid_soon|length}}</div><div class="stat-label">čoskoro</div></div>
+<div class="stat"><div class="stat-value">{{summary.unpaid_total}}</div><div class="stat-label">spolu</div></div>
 </div>
-{% else %}<div class="small">Nič nečaká na zaplatenie. ✅</div>{% endif %}
+<a href="/payments"><button type="button">Otvoriť platby</button></a>
+</div>
+
+<div class="card summary-card deferred-summary">
+<h2>↷ Odložené platby</h2>
+{% if deferred %}
+<div class="summary-stats">
+<div class="stat"><div class="stat-value">{{deferred|sum(attribute='amount')|round(2)}} €</div><div class="stat-label">odložené</div></div>
+<div class="stat"><div class="stat-value">{{deferred|length}}</div><div class="stat-label">počet</div></div>
+</div>
+{% set next_deferred = deferred|sort(attribute='deferred_to')|first %}
+{% if next_deferred %}<div class="small">Najbližšie: {{next_deferred.name}} — {{next_deferred.deferred_to}}</div>{% endif %}
+<div class="deferred-mini-list">
+{% for p in (deferred|sort(attribute='deferred_to'))[:3] %}
+<div class="deferred-mini-row"><span>{{p.name}}</span><span>{{p.amount}} € · {{p.deferred_to}}</span></div>
+{% endfor %}
+</div>
+{% else %}<div class="small">Žiadne odložené platby.</div>{% endif %}
+<a href="/deferred"><button type="button">Otvoriť odložené</button></a>
+</div>
+
+<div class="card summary-card envelopes-summary-dashboard">
+<h2>✉ Obálky</h2>
+<div class="summary-stats">
+<div class="stat"><div class="stat-value">{{"%.2f"|format(envelope_totals.total_limit)}} €</div><div class="stat-label">plán</div></div>
+<div class="stat"><div class="stat-value">{{"%.2f"|format(envelope_totals.total_spent)}} €</div><div class="stat-label">minuté</div></div>
+<div class="stat"><div class="stat-value">{{"%.2f"|format(envelope_totals.total_remaining)}} €</div><div class="stat-label">ostáva</div></div>
+</div>
+{% for r in envelope_rows[:3] %}
+<div class="deferred-mini-row"><span>{{r.category}}</span><span>{{"%.2f"|format(r.remaining)}} € ostáva</span></div>
+{% endfor %}
+<a href="/envelopes"><button type="button">Spravovať obálky</button></a>
+</div>
+
+<div class="card summary-card activity-summary">
+<h2>🕘 Nedávna aktivita</h2>
+{% if audit_entries %}
+{% for a in audit_entries[:5] %}
+<div class="deferred-mini-row"><span>{{audit_action_label.get(a.action, a.action)}}</span><span class="small">{{a.at}}</span></div>
+{% endfor %}
+{% else %}<div class="small">Zatiaľ žiadna aktivita.</div>{% endif %}
+<a href="/history"><button type="button">Celá história</button></a>
+</div>
+{% endif %}
+
+{% if active_view == 'payments' %}
+<div class="card section">
+<h2>Po splatnosti ({{unpaid_overdue|length}})</h2>
+{% if unpaid_overdue %}{{ unpaid_rows(unpaid_overdue) }}{% else %}<div class="small">Nič po splatnosti. ✅</div>{% endif %}
 </div>
 
 <div class="card section">
-<h2>Odložené</h2>
-{% if deferred %}
-<div class="table-scroll">
-<table><tr><th>Názov</th><th>Suma</th><th>Odložené do</th><th></th></tr>
-{% for p in deferred %}
-<tr data-payment-id="{{p.get('id','')}}" data-cycle-key="{{p.get('origin_cycle_key', cycle_key)}}">
-<td>{{p.name}}</td><td>{{p.amount}} €</td>
-<td><span class="badge warn">Odložené do {{p.get('deferred_to','-')}}</span></td>
-<td class="actions-stack">
-{{ paid_button(p.get('id',''), p.get('origin_cycle_key', cycle_key)) }}
-{{ defer_widget(p.get('id',''), p.get('origin_cycle_key', cycle_key), 'Zmeniť dátum') }}
-{{ state_form(p.get('id',''), p.get('origin_cycle_key', cycle_key), selectable_states, state_label) }}
-</td></tr>
-{% endfor %}
-</table>
+<h2>Splatné čoskoro ({{unpaid_soon|length}})</h2>
+{% if unpaid_soon %}{{ unpaid_rows(unpaid_soon) }}{% else %}<div class="small">Nič v najbližších dňoch.</div>{% endif %}
 </div>
-{% else %}<div class="small">Nič odložené.</div>{% endif %}
+
+<div class="card section">
+<h2>Čaká na potvrdenie ({{unpaid_pending|length}})</h2>
+{% if unpaid_pending %}{{ unpaid_rows(unpaid_pending) }}{% else %}<div class="small">Nič nečaká na zaplatenie. ✅</div>{% endif %}
 </div>
 
 <details class="card section">
@@ -927,28 +1037,13 @@ button.tiny.defer-quick{padding:6px 9px;font-size:11px;border-radius:999px;backg
 
 <div class="card">
 <h2>Môžem minúť?</h2>
-<form method="get" action="/">
+<form method="get" action="/payments">
 <div class="inline"><input name="test" placeholder="napr. 50" value="{{test_amount}}"><button>Otestovať</button></div>
 </form>
 {% if test_result %}<pre>{{test_result}}</pre>{% endif %}
 </div>
 
 <div class="card">
-<h2>Príjmy</h2>
-<div class="table-scroll">
-<table><tr><th>Názov</th><th>Suma</th><th>Deň</th><th></th></tr>
-{% for x in incomes %}
-<tr><td>{{x.get('name')}}</td><td>{{x.get('amount')}} €</td><td>{{x.get('day')}}</td>
-<td class="actions">
-<form method="get" action="/edit/income/{{loop.index0}}"><button class="secondary">Upraviť</button></form>
-<form method="post" action="/income/delete/{{loop.index0}}"><button class="danger">Zmazať</button></form>
-</td></tr>
-{% endfor %}
-</table>
-</div>
-</div>
-
-<div class="card" id="payments">
 <h2>Platby (všetky, vrátane šablón)</h2>
 <div class="small">Stav platí pre aktuálny cyklus ({{cycle_key}}). Úprava platby mení iba šablónu, nie stav v tomto cykle.</div>
 <div class="table-scroll">
@@ -975,7 +1070,7 @@ button.tiny.defer-quick{padding:6px 9px;font-size:11px;border-radius:999px;backg
 </div>
 </div>
 
-<div class="card section" id="onetime">
+<div class="card section">
 <h2>Jednorazové platby</h2>
 <div class="small">Platí, iba kým nastane jej termín v tomto mesiaci. Ráta sa do bezpečne minúť rovnako ako pravidelná platba.</div>
 {% if onetime_resolved %}
@@ -1001,48 +1096,7 @@ button.tiny.defer-quick{padding:6px 9px;font-size:11px;border-radius:999px;backg
 {% else %}<div class="small">Zatiaľ žiadna jednorazová platba tento mesiac.</div>{% endif %}
 </div>
 
-<div class="card" id="expenses">
-<h2>Výdavky navyše</h2>
-<div class="table-scroll">
-<table><tr><th>Názov</th><th>Suma</th><th>Dátum</th><th></th></tr>
-{% for x in expenses %}
-<tr><td>{{x.get('name')}}{% if x.get('source')=='ocr' %} <span class="badge">OCR{% if x.get('merchant') %}: {{x.merchant}}{% endif %}</span>{% endif %}</td><td>{{x.get('amount')}} €</td><td>{{x.get('date')}}</td>
-<td class="actions">
-<form method="get" action="/edit/expense/{{loop.index0}}"><button class="secondary">Upraviť</button></form>
-<form method="post" action="/expense/delete/{{loop.index0}}"><button class="danger">Zmazať</button></form>
-</td></tr>
-{% endfor %}
-</table>
-</div>
-</div>
-
-<details class="card section" id="envelopes-manage">
-<summary>Obálky — správa (pridať novú / zmazať)</summary>
-{% if envelope_rows %}
-<div class="table-scroll">
-<table><tr><th>Kategória</th><th>Limit</th><th>Minuté</th><th>Zostáva</th><th>Priemer/mesiac</th><th></th></tr>
-{% for r in envelope_rows %}
-<tr>
-<td>{{r.category}}</td>
-<td>{{"%.2f"|format(r.monthly_limit)}} €</td>
-<td>{{"%.2f"|format(r.spent)}} €</td>
-<td class="{% if r.over_budget %}bad{% else %}ok{% endif %}">{{"%.2f"|format(r.remaining)}} €</td>
-<td class="small">{{"%.2f"|format(r.avg_3m)}} €</td>
-<td class="actions">
-<form method="post" action="/envelope/delete/{{loop.index0}}"><button class="danger">Zmazať</button></form>
-</td>
-</tr>
-{% endfor %}
-<tr><td><strong>Spolu</strong></td><td><strong>{{"%.2f"|format(envelope_totals.total_limit)}} €</strong></td>
-<td><strong>{{"%.2f"|format(envelope_totals.total_spent)}} €</strong></td>
-<td class="{% if envelope_totals.total_remaining < 0 %}bad{% else %}ok{% endif %}"><strong>{{"%.2f"|format(envelope_totals.total_remaining)}} €</strong></td>
-<td></td><td></td></tr>
-</table>
-</div>
-{% else %}<div class="small">Zatiaľ žiadna obálka. Pridaj limit pre kategóriu vľavo.</div>{% endif %}
-</details>
-
-<div class="card section" id="debts">
+<div class="card section">
 <h2>Dlhy</h2>
 <div class="small">Dlžím ja: znižuje bezpečne minúť, keď je nesplatené a v termíne. Dlžia mne: len sledovanie, nezvyšuje bezpečne minúť, kým to reálne nepríde na účet.</div>
 {% if debts %}
@@ -1069,9 +1123,101 @@ button.tiny.defer-quick{padding:6px 9px;font-size:11px;border-radius:999px;backg
 </div>
 {% else %}<div class="small">Zatiaľ žiadny dlh.</div>{% endif %}
 </div>
+{% endif %}
 
-<details class="card" id="audit">
-<summary>História zmien ({{audit_entries|length}})</summary>
+{% if active_view == 'deferred' %}
+<div class="card section">
+<h2>Odložené platby ({{deferred|length}})</h2>
+<div class="small">Odložená platba nikdy nezmizne — po dosiahnutí dátumu sa automaticky vráti medzi nezaplatené.</div>
+{% if deferred %}
+<div class="deferred-detail-list">
+{% for p in deferred|sort(attribute='deferred_to') %}
+<div class="deferred-detail-row {% if p.get('days_left') is not none and p.days_left < 0 %}overdue{% endif %}">
+<div class="deferred-detail-head">
+<span class="deferred-detail-name">{{p.name}}</span>
+<span class="deferred-detail-amount">{{p.amount}} €</span>
+</div>
+<div class="small">Pôvodný cyklus: {{p.get('origin_cycle_key','-')}} · Odložené do: {{p.get('deferred_to','-')}}
+{% if p.get('days_left') is not none %}
+{% if p.days_left < 0 %}<span class="badge">Po termíne</span>{% else %} · o {{p.days_left}} {% if p.days_left == 1 %}deň{% elif p.days_left < 5 %}dni{% else %}dní{% endif %}{% endif %}
+{% endif %}
+</div>
+<div class="pay-actions">
+{{ paid_button(p.get('id',''), p.get('origin_cycle_key', cycle_key)) }}
+{{ defer_widget(p.get('id',''), p.get('origin_cycle_key', cycle_key), 'Zmeniť dátum') }}
+</div>
+</div>
+{% endfor %}
+</div>
+{% else %}<div class="small">Žiadne odložené platby. ✅</div>{% endif %}
+</div>
+{% endif %}
+
+{% if active_view == 'expenses' %}
+<div class="card">
+<h2>Výdavky navyše</h2>
+<div class="table-scroll">
+<table><tr><th>Názov</th><th>Suma</th><th>Dátum</th><th></th></tr>
+{% for x in expenses %}
+<tr><td>{{x.get('name')}}{% if x.get('source')=='ocr' %} <span class="badge">OCR{% if x.get('merchant') %}: {{x.merchant}}{% endif %}</span>{% endif %}</td><td>{{x.get('amount')}} €</td><td>{{x.get('date')}}</td>
+<td class="actions">
+<form method="get" action="/edit/expense/{{loop.index0}}"><button class="secondary">Upraviť</button></form>
+<form method="post" action="/expense/delete/{{loop.index0}}"><button class="danger">Zmazať</button></form>
+</td></tr>
+{% endfor %}
+</table>
+</div>
+</div>
+{% endif %}
+
+{% if active_view == 'envelopes' %}
+<details class="card section">
+<summary>Obálky — správa (pridať novú / zmazať)</summary>
+{% if envelope_rows %}
+<div class="table-scroll">
+<table><tr><th>Kategória</th><th>Limit</th><th>Minuté</th><th>Zostáva</th><th>Priemer/mesiac</th><th></th></tr>
+{% for r in envelope_rows %}
+<tr>
+<td>{{r.category}}</td>
+<td>{{"%.2f"|format(r.monthly_limit)}} €</td>
+<td>{{"%.2f"|format(r.spent)}} €</td>
+<td class="{% if r.over_budget %}bad{% else %}ok{% endif %}">{{"%.2f"|format(r.remaining)}} €</td>
+<td class="small">{{"%.2f"|format(r.avg_3m)}} €</td>
+<td class="actions">
+<form method="post" action="/envelope/delete/{{loop.index0}}"><button class="danger">Zmazať</button></form>
+</td>
+</tr>
+{% endfor %}
+<tr><td><strong>Spolu</strong></td><td><strong>{{"%.2f"|format(envelope_totals.total_limit)}} €</strong></td>
+<td><strong>{{"%.2f"|format(envelope_totals.total_spent)}} €</strong></td>
+<td class="{% if envelope_totals.total_remaining < 0 %}bad{% else %}ok{% endif %}"><strong>{{"%.2f"|format(envelope_totals.total_remaining)}} €</strong></td>
+<td></td><td></td></tr>
+</table>
+</div>
+{% else %}<div class="small">Zatiaľ žiadna obálka. Pridaj limit pre kategóriu vľavo.</div>{% endif %}
+</details>
+{% endif %}
+
+{% if active_view == 'settings' %}
+<div class="card">
+<h2>Príjmy</h2>
+<div class="table-scroll">
+<table><tr><th>Názov</th><th>Suma</th><th>Deň</th><th></th></tr>
+{% for x in incomes %}
+<tr><td>{{x.get('name')}}</td><td>{{x.get('amount')}} €</td><td>{{x.get('day')}}</td>
+<td class="actions">
+<form method="get" action="/edit/income/{{loop.index0}}"><button class="secondary">Upraviť</button></form>
+<form method="post" action="/income/delete/{{loop.index0}}"><button class="danger">Zmazať</button></form>
+</td></tr>
+{% endfor %}
+</table>
+</div>
+</div>
+{% endif %}
+
+{% if active_view == 'history' %}
+<div class="card">
+<h2>História zmien ({{audit_entries|length}})</h2>
 {% if audit_entries %}
 <div class="table-scroll">
 <table><tr><th>Kedy</th><th>Akcia</th><th>Detail</th></tr>
@@ -1081,12 +1227,13 @@ button.tiny.defer-quick{padding:6px 9px;font-size:11px;border-radius:999px;backg
 </table>
 </div>
 {% else %}<div class="small">Zatiaľ žiadna aktivita.</div>{% endif %}
-</details>
+</div>
 
 <details class="card">
 <summary>Technický výstup</summary>
 <pre>{{core}}</pre>
 </details>
+{% endif %}
 </main>
 </div>
 
@@ -1556,6 +1703,9 @@ button.tiny.defer-quick{padding:6px 9px;font-size:11px;border-radius:999px;backg
   }
 
   ready(function(){
+    // Full envelope-grid cards are a /envelopes-only detail view now; the
+    // dashboard shows a short summary instead (server-rendered).
+    if(window.BP_ACTIVE_VIEW !== "envelopes") return;
     fetch("/api/balance-first-summary", {cache:"no-store"})
       .then(function(r){ return r.json(); })
       .then(addCard)
@@ -1798,9 +1948,12 @@ button.tiny.defer-quick{padding:6px 9px;font-size:11px;border-radius:999px;backg
 
   ready(function(){
     hideOldMetricCards();
-    fetch("/api/balance-first-summary",{cache:"no-store"}).then(r=>r.json()).then(render).catch(console.error);
     setTimeout(hideOldMetricCards,500);
     setTimeout(hideOldMetricCards,1500);
+    // The hero is a dashboard-only overview now; detail views (/payments,
+    // /envelopes, ...) stay lean per the app-views layout.
+    if(window.BP_ACTIVE_VIEW !== "dashboard") return;
+    fetch("/api/balance-first-summary",{cache:"no-store"}).then(r=>r.json()).then(render).catch(console.error);
   });
 })();
 </script>
@@ -1842,6 +1995,8 @@ button.tiny.defer-quick{padding:6px 9px;font-size:11px;border-radius:999px;backg
         target = new Date(today.getFullYear(), today.getMonth() + 1, today.getDate());
       } else if(quick.dataset.quick === "end_month"){
         target = endOfMonth(today);
+      } else if(quick.dataset.quick === "today"){
+        target = today;
       }
       if(target) input.value = iso(target);
       return;
@@ -1916,7 +2071,7 @@ def three_month_forecast(today, months=3):
         year, month = bp.next_month(year, month)
     return result
 
-def render_page(edit_income=None, edit_payment=None, edit_expense=None):
+def render_page(edit_income=None, edit_payment=None, edit_expense=None, active_view="dashboard"):
     settings = load(SETTINGS, {"account_balance":0,"use_reserve":False,"safe_min":0})
     incomes = load(INCOMES, [])
     payments = load(PAYMENTS, [])
@@ -1956,6 +2111,17 @@ def render_page(edit_income=None, edit_payment=None, edit_expense=None):
         key=lambda p: (pe.URGENCY_ORDER.get(p["urgency"], 9), p.get("due_date") or date.max),
     )
     groups["deferred"] = still_deferred
+
+    # Split for the /payments view's three sections (dashboard requirements/
+    # docs/navigation_layout.md) -- display-only grouping, never changes
+    # what counts as unpaid.
+    unpaid_overdue = [p for p in groups["unpaid"] if p["urgency"] == pe.OVERDUE]
+    unpaid_soon = [p for p in groups["unpaid"] if p["urgency"] in (pe.DUE_TODAY, pe.SOON)]
+    unpaid_pending = [p for p in groups["unpaid"] if p["urgency"] == pe.LATER]
+
+    for p in groups["deferred"]:
+        deferred_to_raw = p.get("deferred_to")
+        p["days_left"] = (date.fromisoformat(deferred_to_raw) - today).days if deferred_to_raw else None
 
     debts = load(DEBTS, [])
 
@@ -2013,10 +2179,12 @@ def render_page(edit_income=None, edit_payment=None, edit_expense=None):
 
     return render_template_string(
         HTML,
+        active_view=active_view,
         settings=settings, incomes=incomes, payments=payments, expenses=expenses,
         core=core, dash=dash, summary=summary, today=today.isoformat(),
         payments_resolved=payments_resolved, cycle_key=cycle_key,
         unpaid=groups["unpaid"], deferred=groups["deferred"], paid=groups["paid"],
+        unpaid_overdue=unpaid_overdue, unpaid_soon=unpaid_soon, unpaid_pending=unpaid_pending,
         urgency_label_sk=URGENCY_LABEL_SK,
         payment_types=PAYMENT_TYPES, expense_types=EXPENSE_TYPES, freq_label=FREQ_LABEL,
         test_result=test_result, test_amount=test_amount,
@@ -2038,19 +2206,47 @@ def render_page(edit_income=None, edit_payment=None, edit_expense=None):
 
 @app.route("/")
 def index():
-    return render_page()
+    return render_page(active_view="dashboard")
+
+@app.route("/payments")
+def payments_view():
+    return render_page(active_view="payments")
+
+@app.route("/deferred")
+def deferred_view():
+    return render_page(active_view="deferred")
+
+@app.route("/envelopes")
+def envelopes_view():
+    return render_page(active_view="envelopes")
+
+@app.route("/expenses")
+def expenses_view():
+    return render_page(active_view="expenses")
+
+@app.route("/history")
+def history_view():
+    return render_page(active_view="history")
+
+@app.route("/settings", methods=["GET"])
+def settings_view():
+    return render_page(active_view="settings")
+
+@app.route("/receipts")
+def receipts_view():
+    return render_page(active_view="receipts")
 
 @app.route("/edit/income/<int:i>")
 def edit_income(i):
-    return render_page(edit_income=i)
+    return render_page(edit_income=i, active_view="settings")
 
 @app.route("/edit/payment/<int:i>")
 def edit_payment(i):
-    return render_page(edit_payment=i)
+    return render_page(edit_payment=i, active_view="payments")
 
 @app.route("/edit/expense/<int:i>")
 def edit_expense(i):
-    return render_page(edit_expense=i)
+    return render_page(edit_expense=i, active_view="expenses")
 
 @app.post("/settings")
 def settings_save():
@@ -2388,7 +2584,7 @@ def receipt_upload():
         "candidates": result.get("amount_candidates", []),
         "image_path": str(image_path),
     })
-    return redirect(f"/?review_receipt={receipt_id}#receipt-review")
+    return redirect(f"/receipts?review_receipt={receipt_id}#receipt-review")
 
 @app.post("/receipt/confirm")
 def receipt_confirm():
