@@ -222,6 +222,61 @@ class BalanceFirstSummaryTests(unittest.TestCase):
         self.assertEqual(result["current_balance"], 1000)
         self.assertEqual(result["estimated_after_payments"], 900)
 
+    # -- Regression tests: recurring payment frequency was previously
+    # ignored entirely here (every active payment was treated as due
+    # every month, regardless of monthly/quarterly/yearly/custom_months),
+    # which is the exact bug reported for the headline "Reálne k
+    # dispozícii" figure. --
+
+    def test_yearly_payment_not_due_this_month_is_excluded_from_unpaid_total(self):
+        off_month = (TODAY.month % 12) + 1  # any month different from TODAY.month
+        start = date(TODAY.year - 1, off_month, 1)
+        _write(self.data, "payments.json", [{
+            "id": "p1", "name": "Ročná poistka", "amount": 400, "day": 1, "due_day": 1,
+            "frequency": "yearly", "start": start.isoformat(), "start_month": start.isoformat()[:7],
+            "active": True,
+        }])
+        result = bfs.build_balance_first_summary()
+        self.assertEqual(result["unpaid_payments_total"], 0)
+        self.assertEqual(result["unpaid_payment_items"], [])
+
+    def test_yearly_payment_due_this_month_is_counted_as_unpaid(self):
+        start = date(TODAY.year - 1, TODAY.month, 1)
+        _write(self.data, "payments.json", [{
+            "id": "p1", "name": "Ročná poistka", "amount": 400, "day": 1, "due_day": 1,
+            "frequency": "yearly", "start": start.isoformat(), "start_month": start.isoformat()[:7],
+            "active": True,
+        }])
+        result = bfs.build_balance_first_summary()
+        self.assertEqual(result["unpaid_payments_total"], 400)
+
+    def test_quarterly_payment_off_quarter_is_excluded_from_unpaid_total(self):
+        # Start month chosen so TODAY's month is never one of start,
+        # start+3, start+6, start+9.
+        off_start_month = (TODAY.month % 12) + 1
+        start = date(TODAY.year - 1, off_start_month, 1)
+        _write(self.data, "payments.json", [{
+            "id": "p1", "name": "Poistenie domácnosti", "amount": 60, "day": 1, "due_day": 1,
+            "frequency": "quarterly", "start": start.isoformat(), "start_month": start.isoformat()[:7],
+            "active": True,
+        }])
+        result = bfs.build_balance_first_summary()
+        # off_start_month is exactly 1 month off TODAY.month, so TODAY's
+        # month can never be a multiple of 3 away from it.
+        self.assertEqual(result["unpaid_payments_total"], 0)
+
+    def test_custom_months_zero_every_months_does_not_crash_and_is_excluded(self):
+        # Reproduces the reported ZeroDivisionError crash: build_balance_
+        # first_summary() feeds the dashboard's headline figure and must
+        # never raise, no matter how malformed a payment record is.
+        _write(self.data, "payments.json", [{
+            "id": "p2", "name": "Bad custom payment", "amount": 100, "day": 1, "due_day": 1,
+            "frequency": "custom_months", "every_months": 0,
+            "start": "2020-01-01", "start_month": "2020-01", "active": True,
+        }])
+        result = bfs.build_balance_first_summary()
+        self.assertEqual(result["unpaid_payments_total"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -19,6 +19,21 @@ SOURCE_IMPORT = "import"
 
 VALID_SOURCES = {SOURCE_MANUAL, SOURCE_OCR, SOURCE_IMPORT}
 
+# Every receipt/review file on disk is named "<receipt_id><suffix>",
+# where receipt_id is always uuid.uuid4().hex[:12] (see
+# budgetpilot_web.receipt_upload()). Any route that turns a receipt id
+# into a filesystem path must validate it against this shape first --
+# one shared check instead of each call site rolling its own regex, so
+# a validation fix in one place can't miss a sibling call site.
+_RECEIPT_ID_RE = re.compile(r"[0-9a-f]{12}")
+
+
+def is_valid_receipt_id(receipt_id):
+    """Whether `receipt_id` is safe to use in a filesystem path: exactly
+    12 lowercase hex characters, nothing else (no slashes, dots, or any
+    other path-traversal-shaped input)."""
+    return isinstance(receipt_id, str) and bool(_RECEIPT_ID_RE.fullmatch(receipt_id))
+
 _AMOUNT_RE = re.compile(r"(\d{1,4}[.,]\d{2})\b")
 _TOTAL_KEYWORDS = ("spolu", "celkom", "total", "suma", "k úhrade", "k uhrade")
 _CARD_KEYWORDS = ("kartou", "card", "platbou kartou", "uhradené kartou", "uhradene kartou")

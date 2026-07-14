@@ -182,5 +182,49 @@ class CalcMonthOnetimeWiringTests(CalcMonthIsolatedTestCase):
         self.assertEqual(onetime_payment["state"], "paid_other")
 
 
+class CalcMonthFrequencyWiringTests(CalcMonthIsolatedTestCase):
+    """Regression tests for the frequency/occurrence bug at the
+    calc_month() integration level (as opposed to test_obligations.py's
+    unit-level coverage of is_recurring_active() itself). budgetpilot.py's
+    own occurs() now just delegates to obligations.is_recurring_active(),
+    so this also confirms that delegation is wired correctly end to end.
+    """
+
+    def write_payments(self, payments):
+        (self.data / "payments.json").write_text(json.dumps(payments))
+
+    def test_yearly_payment_only_counted_in_its_due_month(self):
+        self.write_payments([{
+            "id": "p1", "name": "Havarijná poistka", "amount": 400, "day": 15, "due_day": 15,
+            "frequency": "yearly", "start": "2026-01-15", "start_month": "2026-01", "active": True,
+        }])
+        # TODAY is patched to 2026-07-09 -- July is not the payment's due
+        # month (January), so it must not appear in this month's payments
+        # or be counted in payment_total at all.
+        r = bp.calc_month(2026, 7)
+        self.assertEqual(r["payment_total"], 0)
+        self.assertEqual([p["name"] for p in r["payments"]], [])
+
+        r_january = bp.calc_month(2026, 1)
+        self.assertEqual(r_january["payment_total"], 400)
+        self.assertEqual([p["name"] for p in r_january["payments"]], ["Havarijná poistka"])
+
+    def test_custom_months_zero_every_months_does_not_crash_calc_month(self):
+        # The reported crash: a custom_months payment saved with
+        # every_months=0 used to raise ZeroDivisionError inside occurs(),
+        # and calc_month() has no try/except around that call -- it
+        # would have propagated straight out of this function (and, in
+        # the web app, out of three_month_forecast(), taking down every
+        # page). It must instead simply be skipped.
+        self.write_payments([{
+            "id": "p2", "name": "Bad custom payment", "amount": 100, "day": 1, "due_day": 1,
+            "frequency": "custom_months", "every_months": 0,
+            "start": "2026-01-01", "start_month": "2026-01", "active": True,
+        }])
+        r = bp.calc_month(2026, 7)
+        self.assertEqual(r["payment_total"], 0)
+        self.assertEqual([p["name"] for p in r["payments"]], [])
+
+
 if __name__ == "__main__":
     unittest.main()

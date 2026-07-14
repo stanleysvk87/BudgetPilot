@@ -6,6 +6,7 @@ snapshots. No file I/O and no dependency on the rest of BudgetPilot — takes
 plain data in, returns plain data out, so it can be unit tested in
 isolation (see forecast.py for the same pattern).
 """
+import logging
 from datetime import date, timedelta
 import calendar
 
@@ -14,6 +15,8 @@ from forecast import PENDING, PAID_ME, DEFERRED, VALID_STATES
 RECEIVED = "received"
 I_OWE = "I_owe"
 OWED_TO_ME = "owed_to_me"
+
+_log = logging.getLogger(__name__)
 
 
 def _month_days(year, month):
@@ -31,7 +34,17 @@ def _as_date(value):
 # ---- Recurring obligations ----
 
 def is_recurring_active(item, year, month):
-    """Whether a recurring obligation applies in the given month.
+    """Whether a recurring obligation applies in the given month: both
+    "is this obligation still alive" (active / not cancelled / already
+    started) and "does its frequency pattern actually land in this
+    month" (see occurrence_matches_frequency()).
+
+    This is the single canonical occurrence check — the web dashboard,
+    balance_first_summary.py, and budgetpilot.py's calc_month() (via
+    budgetpilot.occurs(), which now just delegates here) all resolve
+    "is this payment due this month" through this one function, so a
+    quarterly/yearly/custom_months payment can no longer be treated as
+    monthly in one place and correctly-scheduled in another.
 
     Backward compatible with legacy data/payments.json entries: items with
     no 'active' field default to active, and 'start_month' falls back to
@@ -50,7 +63,77 @@ def is_recurring_active(item, year, month):
     if start_month and month_key(year, month) < start_month:
         return False
 
-    return True
+    return occurrence_matches_frequency(item, year, month)
+
+
+def normalize_every_months(item, default=1):
+    """Coerce a custom_months item's `every_months` field to a valid
+    positive int.
+
+    - key absent entirely -> `default` (matches the historical fallback
+      of "every 1 month" for data saved before this field existed).
+    - key present but not a positive integer (zero, negative, non-numeric)
+      -> logs a warning and returns None, so the caller treats the
+      occurrence as unresolvable and skips it instead of dividing by zero.
+    """
+    if "every_months" not in item:
+        return default
+
+    raw = item["every_months"]
+    try:
+        n = int(float(raw))
+    except (TypeError, ValueError):
+        n = None
+
+    if n is None or n < 1:
+        _log.warning(
+            "invalid every_months=%r for custom_months payment id=%r name=%r "
+            "-- skipping this occurrence instead of dividing by zero",
+            raw, item.get("id"), item.get("name"),
+        )
+        return None
+
+    return n
+
+
+def occurrence_matches_frequency(item, year, month):
+    """Whether `item`'s `frequency` pattern lands in `year`/`month`,
+    independent of the active/cancelled/start_month lifecycle checks in
+    is_recurring_active() above.
+
+    `frequency` defaults to "monthly" (always occurs). "quarterly" and
+    "custom_months" occur every 3 (respectively `every_months`) months
+    counted from `start`; "yearly" occurs once a year, in `start`'s
+    month; "once" occurs only in `start`'s exact year+month. An
+    unrecognized frequency string is treated as not occurring, matching
+    this function's own historical behavior rather than silently
+    defaulting to monthly.
+    """
+    freq = item.get("frequency", "monthly")
+    if freq == "monthly":
+        return True
+
+    start_raw = item.get("start")
+    try:
+        start = date.fromisoformat(start_raw) if start_raw else date(year, 1, 1)
+    except ValueError:
+        start = date(year, 1, 1)
+
+    diff = (year - start.year) * 12 + (month - start.month)
+
+    if freq == "quarterly":
+        return diff % 3 == 0
+    if freq == "yearly":
+        return start.month == month
+    if freq == "custom_months":
+        every = normalize_every_months(item)
+        if every is None:
+            return False
+        return diff % every == 0
+    if freq == "once":
+        return start.year == year and start.month == month
+
+    return False
 
 
 def recurring_due_date(item, year, month):

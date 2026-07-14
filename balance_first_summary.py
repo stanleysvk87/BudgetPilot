@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 import calendar
-import json
 import re
 from datetime import date, datetime, timedelta
 
 from flask import jsonify, redirect, request
 
 import audit_log
+import obligations as ob
+import json_store
 from paths import app_base, data_dir
 
 BASE = app_base()
@@ -20,19 +21,11 @@ DEFERRED_STATE = "deferred"
 
 
 def _read_json(name: str, default):
-    path = DATA / name
-    try:
-        if not path.exists():
-            return default
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return default
+    return json_store.read_json(DATA / name, default)
 
 
 def _write_json(name: str, value) -> None:
-    path = DATA / name
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    json_store.atomic_write_json(DATA / name, value)
 
 
 def _num(value, default=0.0) -> float:
@@ -261,13 +254,23 @@ def build_balance_first_summary() -> dict:
         expenses = []
 
     cycle = _cycle()
-    today = date.today().isoformat()
+    now = date.today()
+    today = now.isoformat()
     balance = _num(settings.get("account_balance", settings.get("real_balance", 0)), 0)
     current_onetime = [
         p for p in onetime
         if isinstance(p, dict) and str(p.get("due_date") or "")[:7] == cycle
     ]
-    payment_templates = payments + current_onetime
+    # Recurring payments are only obligations THIS month if their own
+    # frequency (monthly/quarterly/yearly/custom_months/once) actually
+    # lands here -- ob.is_recurring_active() is the same canonical check
+    # the web dashboard uses, so a yearly bill can no longer show up as
+    # "unpaid" in a month it was never due (see obligations.py docstring).
+    active_payments = [
+        p for p in payments
+        if isinstance(p, dict) and ob.is_recurring_active(p, now.year, now.month)
+    ]
+    payment_templates = active_payments + current_onetime
 
     event_by_pid = _events_by_payment_id(events, cycle)
 

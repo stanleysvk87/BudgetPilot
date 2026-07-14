@@ -8,19 +8,15 @@ it's purely a human-readable trail for the "Audit/history" dashboard
 section. No file I/O helpers beyond load/append — same pattern as
 payment_events.py's load/save, just for a log instead of state.
 """
-import json
 from datetime import datetime
+
+import json_store
 
 MAX_ENTRIES = 200
 
 
 def load_audit_log(path):
-    if not path.exists():
-        return []
-    try:
-        return json.loads(path.read_text())
-    except Exception:
-        return []
+    return json_store.read_json(path, [])
 
 
 def log_action(path, action, detail="", now=None):
@@ -33,6 +29,5 @@ def log_action(path, action, detail="", now=None):
         "detail": detail,
     })
     entries = entries[-MAX_ENTRIES:]
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(entries, indent=2, ensure_ascii=False))
+    json_store.atomic_write_json(path, entries)
     return entries

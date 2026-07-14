@@ -22,6 +22,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import budgetpilot as bp
 import budgetpilot_web as web
 import payment_events as pe
 import balance_first_summary as bfs
@@ -108,6 +109,76 @@ class RouteStatusTests(AppViewsTestCase):
             token = base64.b64encode(b"saldo:tajne").decode()
             response = self.client.get("/", headers={"Authorization": f"Basic {token}"})
             self.assertEqual(response.status_code, 200)
+
+
+class FrequencyBugRegressionTests(AppViewsTestCase):
+    """End-to-end regression tests for the recurring-payment frequency
+    bug reported against the live dashboard: budgetpilot.calc_month()
+    and balance_first_summary.py already have their own dedicated
+    coverage (test_budgetpilot_calc_month.py, test_balance_first_summary.py)
+    -- this class instead proves the fix reaches all the way through
+    render_page() itself, since that's literally how the original bug
+    was demonstrated (a bad payment record crashing every page).
+
+    render_page() calls bp.calc_month() directly (via
+    three_month_forecast()), and budgetpilot.py reads its own
+    module-level SETTINGS/PAYMENTS/etc constants rather than web's --
+    without patching those too, this class would silently exercise
+    budgetpilot.py against the real data/ directory instead of the
+    isolated temp one AppViewsTestCase already sets up for `web`.
+    """
+
+    def setUp(self):
+        super().setUp()
+        data = Path(self.tmp.name)
+        patches = [
+            mock.patch.object(bp, "TODAY", date.today()),
+            mock.patch.object(bp, "SETTINGS", data / "settings.json"),
+            mock.patch.object(bp, "INCOMES", data / "incomes.json"),
+            mock.patch.object(bp, "PAYMENTS", data / "payments.json"),
+            mock.patch.object(bp, "EXPENSES", data / "expenses.json"),
+            mock.patch.object(bp, "DEBTS", data / "debts.json"),
+            mock.patch.object(bp, "ONETIME", data / "onetime.json"),
+        ]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_bad_custom_months_payment_does_not_crash_the_dashboard(self):
+        # This exact record used to raise ZeroDivisionError inside
+        # occurs()/is_recurring_active(), uncaught, from render_page()'s
+        # unconditional three_month_forecast() call -- taking down every
+        # view in the app, not just the dashboard.
+        web.PAYMENTS.write_text(json.dumps([
+            {"id": "p2", "name": "Bad custom payment", "amount": 100, "day": 1, "due_day": 1,
+             "frequency": "custom_months", "every_months": 0,
+             "start": "2026-01-01", "start_month": "2026-01", "active": True},
+        ]))
+        for path in ("/", "/payments", "/envelopes", "/manage"):
+            with self.subTest(path=path):
+                response = self.client.get(path)
+                self.assertEqual(response.status_code, 200, f"{path} crashed instead of degrading gracefully")
+
+    def test_yearly_payment_not_due_this_month_does_not_appear_as_unpaid_on_dashboard(self):
+        off_month = (date.today().month % 12) + 1
+        start = date(date.today().year - 1, off_month, 1)
+        web.PAYMENTS.write_text(json.dumps([
+            {"id": "p3", "name": "Rocna Poistka Auta", "amount": 400, "day": 1, "due_day": 1,
+             "frequency": "yearly", "start": start.isoformat(), "start_month": start.isoformat()[:7],
+             "active": True},
+        ]))
+        html = self.client.get("/payments").data.decode()
+        self.assertNotIn("Rocna Poistka Auta", html)
+
+    def test_yearly_payment_due_this_month_does_appear_as_unpaid_on_dashboard(self):
+        start = date(date.today().year - 1, date.today().month, 1)
+        web.PAYMENTS.write_text(json.dumps([
+            {"id": "p4", "name": "Rocna Poistka Domu", "amount": 250, "day": 1, "due_day": 1,
+             "frequency": "yearly", "start": start.isoformat(), "start_month": start.isoformat()[:7],
+             "active": True},
+        ]))
+        html = self.client.get("/payments").data.decode()
+        self.assertIn("Rocna Poistka Domu", html)
 
 
 class DashboardIsSummaryOnlyTests(AppViewsTestCase):
@@ -270,6 +341,34 @@ class ProblemsViewTests(AppViewsTestCase):
 
         self.assertEqual(len(problems), 1)
         self.assertEqual(problems[0]["severity"], "ok")
+
+    def test_corrupt_envelopes_file_is_reported_as_a_critical_problem(self):
+        # Previously a corrupt data file was silently swallowed by a bare
+        # except-Exception and treated as if it were simply empty --
+        # nothing distinguished "no envelopes configured" from
+        # "envelopes file is damaged and its contents are effectively
+        # invisible". (envelopes.json specifically, rather than
+        # payments.json, so this doesn't also trip the unrelated
+        # first-run-wizard gate, which treats an unreadable
+        # payments.json the same as "no payments yet".)
+        web.ENVELOPES.write_text("{not valid json")
+
+        html = self.client.get("/problems").data.decode()
+
+        self.assertIn("Poškodený dátový súbor", html)
+        self.assertIn("envelopes.json", html)
+
+    def test_corrupt_data_file_does_not_crash_any_view(self):
+        web.ENVELOPES.write_text("{not valid json")
+        for path in ("/", "/payments", "/manage", "/problems", "/debug/balance"):
+            with self.subTest(path=path):
+                response = self.client.get(path)
+                self.assertEqual(response.status_code, 200, f"{path} crashed on a corrupt data file")
+
+    def test_valid_data_files_report_no_corruption(self):
+        problems = web._build_problem_reports(web._debug_balance_context())
+        titles = [p["title"] for p in problems]
+        self.assertNotIn("Poškodený dátový súbor", titles)
 
 
 class DeferredDashboardCardTests(AppViewsTestCase):
@@ -537,6 +636,59 @@ class ReceiptImageRouteTests(AppViewsTestCase):
     def test_non_hex_receipt_id_is_rejected_before_touching_disk(self):
         response = self.client.get("/receipt/image/..%2f..%2fetc%2fpasswd")
         self.assertEqual(response.status_code, 404)
+
+    def test_path_traversal_shaped_review_receipt_query_param_is_ignored(self):
+        # review_id used to be spliced straight into a filesystem path
+        # with no validation at all -- a crafted value could read any
+        # *.review.json-suffixed file reachable via '..' from
+        # RECEIPTS_DIR. Place a "secret" file one directory above
+        # RECEIPTS_DIR (i.e. directly in the data dir) at the exact
+        # path such a payload would target, and confirm it never shows
+        # up on the page.
+        secret_path = web.RECEIPTS_DIR.parent / "secret.review.json"
+        secret_path.write_text(json.dumps({
+            "amount": 999, "merchant": "SECRET-LEAKED-MERCHANT", "date": "2026-01-01",
+        }))
+        html = self.client.get("/receipts?review_receipt=../secret").data.decode()
+        self.assertNotIn("SECRET-LEAKED-MERCHANT", html)
+
+    def test_valid_review_receipt_query_param_still_works(self):
+        (web.RECEIPTS_DIR / "abc123abc123.review.json").write_text(json.dumps({
+            "amount": 12.5, "merchant": "Lidl", "date": "2026-07-01", "candidates": [],
+        }))
+        html = self.client.get("/receipts?review_receipt=abc123abc123").data.decode()
+        self.assertIn("Lidl", html)
+
+    def test_path_traversal_shaped_receipt_id_in_confirm_does_not_delete_outside_files(self):
+        # receipt_confirm()'s receipt_id form field used to be unlinked
+        # with no validation -- a crafted value could delete any
+        # *.review.json-suffixed file reachable via '..' from
+        # RECEIPTS_DIR. Place a file at the exact path such a payload
+        # would target and confirm it survives the request.
+        sibling = web.RECEIPTS_DIR.parent / "sibling.review.json"
+        sibling.write_text(json.dumps({"amount": 1}))
+
+        response = self.client.post("/receipt/confirm", data={
+            "receipt_id": "../sibling",
+            "name": "Test",
+            "amount": "10",
+            "date": "2026-07-01",
+        })
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(sibling.exists(), "a path-traversal-shaped receipt_id must not delete files")
+
+    def test_valid_receipt_id_in_confirm_still_deletes_its_review_file(self):
+        review_file = web.RECEIPTS_DIR / "abc123abc123.review.json"
+        review_file.write_text(json.dumps({"amount": 1}))
+
+        response = self.client.post("/receipt/confirm", data={
+            "receipt_id": "abc123abc123",
+            "name": "Test",
+            "amount": "10",
+            "date": "2026-07-01",
+        })
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(review_file.exists())
 
 
 class HistoryTimelineGroupingTests(AppViewsTestCase):

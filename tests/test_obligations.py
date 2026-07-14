@@ -51,6 +51,151 @@ class RecurringObligationTests(unittest.TestCase):
         self.assertTrue(ob.is_recurring_active(recurring[0], 2026, 9))
 
 
+class FrequencyOccurrenceTests(unittest.TestCase):
+    """Regression tests for the canonical occurrence check
+    (obligations.is_recurring_active / occurrence_matches_frequency).
+
+    Before this fix, is_recurring_active() ignored `frequency` entirely
+    and treated every active payment as monthly -- a yearly/quarterly
+    bill showed up as due (and unpaid) in every single month on the web
+    dashboard and in balance_first_summary.py, even though the older,
+    separate budgetpilot.occurs() got this right. These tests cover each
+    frequency this bug could affect, plus the interaction with
+    cancellation and future start dates the review specifically asked
+    for.
+    """
+
+    def test_monthly_occurs_every_month(self):
+        payment = {"frequency": "monthly", "start": "2026-01-15", "start_month": "2026-01"}
+        for month in range(1, 13):
+            with self.subTest(month=month):
+                self.assertTrue(ob.is_recurring_active(payment, 2026, month))
+
+    def test_quarterly_occurs_every_third_month_from_start(self):
+        payment = {"frequency": "quarterly", "start": "2026-01-15", "start_month": "2026-01"}
+        expect_true = {1, 4, 7, 10}
+        for month in range(1, 13):
+            with self.subTest(month=month):
+                self.assertEqual(
+                    ob.is_recurring_active(payment, 2026, month),
+                    month in expect_true,
+                )
+
+    def test_yearly_occurs_only_in_start_month_reproduces_original_bug_report(self):
+        # This is the exact shape of the reported bug: a once-a-year bill
+        # (car insurance) must be "due" only in its own month, in any
+        # year on/after its start year -- not in all twelve.
+        payment = {
+            "id": "p1", "name": "Havarijná poistka", "amount": 400,
+            "frequency": "yearly", "start": "2026-01-15", "start_month": "2026-01",
+            "active": True,
+        }
+        for month in range(1, 13):
+            with self.subTest(month=month):
+                self.assertEqual(ob.is_recurring_active(payment, 2026, month), month == 1)
+        # And it recurs the following year, still only in January.
+        self.assertTrue(ob.is_recurring_active(payment, 2027, 1))
+        self.assertFalse(ob.is_recurring_active(payment, 2027, 7))
+
+    def test_custom_months_occurs_every_n_months_from_start(self):
+        payment = {
+            "frequency": "custom_months", "every_months": 6,
+            "start": "2026-01-01", "start_month": "2026-01",
+        }
+        expect_true = {1, 7}
+        for month in range(1, 13):
+            with self.subTest(month=month):
+                self.assertEqual(
+                    ob.is_recurring_active(payment, 2026, month),
+                    month in expect_true,
+                )
+
+    def test_custom_months_zero_every_months_does_not_crash_and_is_skipped(self):
+        # Reproduces the second reported bug: a web form submission of
+        # "0" for every_months used to raise ZeroDivisionError inside
+        # this exact check, which render_page() calls for every payment
+        # on every page load -- one bad value took the whole app down.
+        # Also verifies the "hardening" requirement that a skipped,
+        # malformed record is logged rather than silently discarded.
+        payment = {
+            "id": "p2", "name": "Custom", "frequency": "custom_months",
+            "every_months": 0, "start": "2026-01-01", "start_month": "2026-01",
+        }
+        with self.assertLogs("obligations", level="WARNING") as logs:
+            self.assertFalse(ob.is_recurring_active(payment, 2026, 7))
+        self.assertIn("every_months=0", logs.output[0])
+        self.assertIn("p2", logs.output[0])
+
+    def test_custom_months_negative_every_months_does_not_crash_and_is_skipped(self):
+        payment = {
+            "frequency": "custom_months", "every_months": -3,
+            "start": "2026-01-01", "start_month": "2026-01",
+        }
+        self.assertFalse(ob.is_recurring_active(payment, 2026, 7))
+
+    def test_custom_months_non_numeric_every_months_does_not_crash_and_is_skipped(self):
+        payment = {
+            "frequency": "custom_months", "every_months": "many",
+            "start": "2026-01-01", "start_month": "2026-01",
+        }
+        self.assertFalse(ob.is_recurring_active(payment, 2026, 7))
+
+    def test_custom_months_missing_every_months_defaults_to_one_month(self):
+        # No explicit every_months at all (old data saved before the
+        # field existed) -- historical behavior was "every 1 month".
+        payment = {"frequency": "custom_months", "start": "2026-01-01", "start_month": "2026-01"}
+        for month in range(1, 13):
+            with self.subTest(month=month):
+                self.assertTrue(ob.is_recurring_active(payment, 2026, month))
+
+    def test_once_occurs_only_in_the_exact_start_month(self):
+        payment = {"frequency": "once", "start": "2026-03-10", "start_month": "2026-03"}
+        self.assertTrue(ob.is_recurring_active(payment, 2026, 3))
+        self.assertFalse(ob.is_recurring_active(payment, 2026, 2))
+        self.assertFalse(ob.is_recurring_active(payment, 2026, 4))
+        self.assertFalse(ob.is_recurring_active(payment, 2027, 3))
+
+    def test_cancelled_yearly_payment_does_not_reappear_after_cancellation(self):
+        payment = {
+            "frequency": "yearly", "start": "2026-01-15", "start_month": "2026-01",
+            "cancelled_from_month": "2027-01",
+        }
+        self.assertTrue(ob.is_recurring_active(payment, 2026, 1))
+        self.assertFalse(ob.is_recurring_active(payment, 2027, 1))
+
+    def test_future_start_date_quarterly_payment_does_not_appear_before_start(self):
+        payment = {"frequency": "quarterly", "start": "2026-10-01", "start_month": "2026-10"}
+        self.assertFalse(ob.is_recurring_active(payment, 2026, 7))
+        self.assertFalse(ob.is_recurring_active(payment, 2026, 9))
+        self.assertTrue(ob.is_recurring_active(payment, 2026, 10))
+
+    def test_unrecognized_frequency_does_not_occur(self):
+        # occurrence_matches_frequency() must fail closed (not occurring)
+        # rather than silently defaulting to monthly for a garbled value.
+        payment = {"frequency": "biannual-oops", "start": "2026-01-01", "start_month": "2026-01"}
+        self.assertFalse(ob.is_recurring_active(payment, 2026, 7))
+
+
+class NormalizeEveryMonthsTests(unittest.TestCase):
+    def test_missing_key_returns_default(self):
+        self.assertEqual(ob.normalize_every_months({}), 1)
+        self.assertEqual(ob.normalize_every_months({}, default=3), 3)
+
+    def test_valid_positive_value_is_returned_as_int(self):
+        self.assertEqual(ob.normalize_every_months({"every_months": "6"}), 6)
+        self.assertEqual(ob.normalize_every_months({"every_months": 6.0}), 6)
+
+    def test_zero_or_negative_or_non_numeric_returns_none(self):
+        with self.assertLogs("obligations", level="WARNING"):
+            self.assertIsNone(ob.normalize_every_months({"every_months": 0}))
+        with self.assertLogs("obligations", level="WARNING"):
+            self.assertIsNone(ob.normalize_every_months({"every_months": -1}))
+        with self.assertLogs("obligations", level="WARNING"):
+            self.assertIsNone(ob.normalize_every_months({"every_months": "many"}))
+        with self.assertLogs("obligations", level="WARNING"):
+            self.assertIsNone(ob.normalize_every_months({"every_months": None}))
+
+
 class OnetimeObligationTests(unittest.TestCase):
     def test_onetime_obligation_appears_only_when_due(self):
         item = {"name": "Car repair", "amount": 300, "due_date": "2026-07-18"}

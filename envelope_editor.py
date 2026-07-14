@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import json
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -11,6 +10,7 @@ from pathlib import Path
 from flask import jsonify, redirect, request
 
 import audit_log
+import json_store
 from paths import app_base, data_dir
 
 BASE = app_base()
@@ -20,17 +20,11 @@ AUDIT_LOG_PATH = DATA / "audit_log.json"
 
 
 def _read_json(path: Path, default):
-    try:
-        if not path.exists():
-            return default
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return default
+    return json_store.read_json(path, default)
 
 
 def _write_json(path: Path, value) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    json_store.atomic_write_json(path, value)
 
 
 def _num(value, default=0.0) -> float:
@@ -85,12 +79,20 @@ def _normalize(envelope: dict, amount: float | None = None) -> dict:
 def register_envelope_editor(app):
     @app.get("/api/envelopes")
     def api_envelopes():
+        # Read-only: normalizes the response shape (old-style records
+        # missing id/name/amount aliases still render correctly) without
+        # ever writing back to disk. A GET must never modify persistent
+        # data -- this endpoint previously rewrote envelopes.json on
+        # every call and, in doing so, permanently dropped any envelope
+        # with active=False from the file, not just from the response.
         envelopes = _read_json(ENVELOPES, [])
         if not isinstance(envelopes, list):
             envelopes = []
 
-        normalized = [_normalize(e) for e in envelopes if isinstance(e, dict) and e.get("active", True) is not False]
-        _write_json(ENVELOPES, normalized)
+        normalized = [
+            _normalize(dict(e)) for e in envelopes
+            if isinstance(e, dict) and e.get("active", True) is not False
+        ]
 
         return jsonify({
             "envelopes": [

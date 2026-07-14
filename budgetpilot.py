@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-import json
 import sys
 from datetime import date
 import calendar
 
 from forecast import forecast as run_forecast, payment_state, current_cash_position
-from obligations import month_key, debt_to_payment, generate_onetime_for_month
+from obligations import month_key, debt_to_payment, generate_onetime_for_month, is_recurring_active
 from payment_events import load_payment_events, apply_payment_events
 from paths import app_base, data_dir
+import json_store
 
 BASE = app_base()
 DATA = data_dir()
@@ -23,8 +23,8 @@ SAFE_MIN = None
 
 def load(path, default):
     if not path.exists():
-        path.write_text(json.dumps(default, indent=2, ensure_ascii=False))
-    return json.loads(path.read_text())
+        json_store.atomic_write_json(path, default)
+    return json_store.read_json(path, default)
 
 def month_days(year, month):
     return calendar.monthrange(year, month)[1]
@@ -33,34 +33,15 @@ def next_month(year, month):
     return (year + 1, 1) if month == 12 else (year, month + 1)
 
 def occurs(item, year, month):
-    if not item.get("active", True):
-        return False
-    cancelled_from = item.get("cancelled_from_month")
-    if cancelled_from and month_key(year, month) >= cancelled_from:
-        return False
+    """Whether `item` is due in `year`/`month`.
 
-    freq = item.get("frequency", "monthly")
-    start = date.fromisoformat(item.get("start", f"{year}-01-01"))
-    current = date(year, month, 1)
-    start_month = date(start.year, start.month, 1)
-
-    if current < start_month:
-        return False
-
-    diff = (year - start.year) * 12 + (month - start.month)
-
-    if freq == "monthly":
-        return True
-    if freq == "quarterly":
-        return diff % 3 == 0
-    if freq == "yearly":
-        return start.month == month
-    if freq == "custom_months":
-        return diff % int(item.get("every_months", 1)) == 0
-    if freq == "once":
-        return start.year == year and start.month == month
-
-    return False
+    Thin wrapper kept for backward compatibility (this name is the
+    original, CLI-side occurrence check) — the actual logic now lives in
+    obligations.is_recurring_active(), the one canonical implementation
+    also used by the web dashboard and balance_first_summary.py. See that
+    function's docstring for why this consolidation matters.
+    """
+    return is_recurring_active(item, year, month)
 
 def due_date(item, year, month):
     return date(year, month, min(int(item.get("day", 1)), month_days(year, month)))

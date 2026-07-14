@@ -18,6 +18,7 @@ import envelopes as env
 import budgetpilot as bp
 import audit_log
 import balance_first_summary as bfs
+import json_store
 from forecast import payment_state, PENDING, PAID_ME, PAID_OTHER, PAID_RESERVE, DEFERRED
 from paths import app_base, data_dir
 
@@ -186,35 +187,21 @@ DEBT_DIRECTION_LABEL = {
 }
 
 def load(path, default):
+    """Load `path` as JSON, creating it with `default` content first if it
+    doesn't exist yet (this eager-create behavior — as opposed to
+    json_store.read_json()'s plain "return default" — is relied on
+    elsewhere to make sure a freshly-referenced data file exists on disk
+    the first time it's touched). Delegates the actual read/write to
+    json_store, which is also what distinguishes "file missing" from
+    "file exists but is corrupt" (the latter is logged, not silently
+    swallowed) — see json_store.read_json().
+    """
     if not path.exists():
         save(path, default)
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return default
+    return json_store.read_json(path, default)
 
 def save(path, data):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    try:
-        with tmp.open("w", encoding="utf-8") as f:
-            f.write(json.dumps(data, indent=2, ensure_ascii=False))
-            f.write("\n")
-            f.flush()
-            os.fsync(f.fileno())
-        tmp.replace(path)
-        try:
-            dir_fd = os.open(str(path.parent), os.O_DIRECTORY)
-        except OSError:
-            dir_fd = None
-        if dir_fd is not None:
-            try:
-                os.fsync(dir_fd)
-            finally:
-                os.close(dir_fd)
-    finally:
-        if tmp.exists():
-            tmp.unlink()
+    json_store.atomic_write_json(path, data)
 
 def _payment_amount_and_label(payment_id):
     for path in (PAYMENTS, ONETIME):
@@ -476,6 +463,40 @@ def _impact_message(impact):
         "Pokračovať?",
     ])
 
+def _corrupt_data_files():
+    """Core data files that exist on disk but fail to parse as JSON.
+
+    load()/json_store.read_json() already fail safe to an empty default
+    for these (and log the error -- see json_store.read_json()), so the
+    app keeps running either way. But that fallback must not be the only
+    trace of the problem: a corrupted payments.json silently "resetting"
+    to an empty list is a very different, much more alarming situation
+    than a genuinely empty one, and the difference deserves to be
+    diagnosable from inside the app, not just from a server log someone
+    has to know to go look at.
+    """
+    candidates = {
+        "settings.json": SETTINGS,
+        "incomes.json": INCOMES,
+        "payments.json": PAYMENTS,
+        "expenses.json": EXPENSES,
+        "envelopes.json": ENVELOPES,
+        "debts.json": DEBTS,
+        "onetime.json": ONETIME,
+        "snapshots.json": SNAPSHOTS,
+        "payment_events.json": pe.PAYMENT_EVENTS,
+        "audit_log.json": AUDIT_LOG_PATH,
+    }
+    bad = []
+    for name, path in candidates.items():
+        if not path.exists():
+            continue
+        try:
+            json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            bad.append(name)
+    return bad
+
 def _debug_balance_context():
     summary = bfs.build_balance_first_summary()
     payments = load(PAYMENTS, [])
@@ -503,6 +524,7 @@ def _debug_balance_context():
         "events": events,
         "orphan_events": orphan_events,
         "invalid_payments": invalid_payments,
+        "corrupt_files": _corrupt_data_files(),
     }
 
 def _build_problem_reports(ctx):
@@ -520,6 +542,21 @@ def _build_problem_reports(ctx):
             "action_label": action_label,
             "details": details or [],
         })
+
+    if ctx.get("corrupt_files"):
+        add(
+            "critical",
+            "Poškodený dátový súbor",
+            f"{len(ctx['corrupt_files'])} súbor(y) s dátami sa nedajú načítať ako platný JSON: "
+            f"{', '.join(ctx['corrupt_files'])}.",
+            "Aplikácia tieto dáta dočasne nahrádza prázdnymi, takže platby, výdavky alebo iné "
+            "záznamy môžu chýbať v odhade, hoci v skutočnosti existujú.",
+            "Skontroluj poslednú zálohu v priečinku so zálohami a obnov poškodený súbor odtiaľ, "
+            "alebo súbor over/oprav ručne.",
+            "/manage#backups",
+            "Otvoriť zálohy",
+            list(ctx["corrupt_files"]),
+        )
 
     if summary.get("missing_after_everything", 0) > 0:
         add(
@@ -976,7 +1013,7 @@ def render_page(edit_income=None, edit_payment=None, edit_expense=None, active_v
 
     receipt_review = None
     review_id = request.args.get("review_receipt")
-    if review_id:
+    if review_id and receipts.is_valid_receipt_id(review_id):
         review_path = RECEIPTS_DIR / f"{review_id}.review.json"
         if review_path.exists():
             stored = load(review_path, {})
@@ -1489,7 +1526,7 @@ def onetime_delete(i):
 def receipt_image(receipt_id):
     # receipt_id is always our own uuid4().hex[:12] -- reject anything else
     # up front rather than letting a crafted id walk the receipts dir.
-    if not re.fullmatch(r"[0-9a-f]{12}", receipt_id):
+    if not receipts.is_valid_receipt_id(receipt_id):
         abort(404)
     for ext in sorted(ALLOWED_RECEIPT_EXTENSIONS):
         candidate = RECEIPTS_DIR / f"{receipt_id}{ext}"
@@ -1551,7 +1588,7 @@ def receipt_confirm():
     save(EXPENSES, data)
     log_audit("ocr_expense_saved", f"{confirmed['name']} {confirmed['amount']:.2f} €")
 
-    if receipt_id:
+    if receipt_id and receipts.is_valid_receipt_id(receipt_id):
         (RECEIPTS_DIR / f"{receipt_id}.review.json").unlink(missing_ok=True)
     return go_home()
 

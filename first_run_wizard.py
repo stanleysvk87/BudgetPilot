@@ -9,13 +9,13 @@ Balance-first model:
 
 from __future__ import annotations
 
-import json
 import uuid
 from datetime import date, datetime
 from pathlib import Path
 
 from flask import redirect, render_template_string, request
 from paths import app_base, data_dir
+import json_store
 
 
 BASE = app_base()
@@ -23,17 +23,11 @@ DATA = data_dir()
 
 
 def _read_json(path: Path, default):
-    try:
-        if not path.exists():
-            return default
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return default
+    return json_store.read_json(path, default)
 
 
 def _write_json(path: Path, value) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    json_store.atomic_write_json(path, value)
 
 
 def _to_float(value, default=0.0) -> float:

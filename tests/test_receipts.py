@@ -199,5 +199,32 @@ class CreateExpenseFromReceiptResultTests(unittest.TestCase):
         self.assertNotIn("original_image_path", expense)
 
 
+class IsValidReceiptIdTests(unittest.TestCase):
+    """The one shared id-shape check every route that turns a receipt id
+    into a filesystem path must use (see receipts.is_valid_receipt_id's
+    docstring) -- previously /receipt/image/<id> validated this inline
+    while two other call sites (the review_receipt query param and
+    receipt_confirm()'s receipt_id form field) didn't validate at all."""
+
+    def test_well_formed_id_is_valid(self):
+        self.assertTrue(rc.is_valid_receipt_id("abc123abc123"))
+
+    def test_wrong_length_is_rejected(self):
+        self.assertFalse(rc.is_valid_receipt_id("abc123"))
+        self.assertFalse(rc.is_valid_receipt_id("abc123abc123ff"))
+
+    def test_uppercase_hex_is_rejected(self):
+        self.assertFalse(rc.is_valid_receipt_id("ABC123ABC123"))
+
+    def test_path_traversal_shaped_input_is_rejected(self):
+        self.assertFalse(rc.is_valid_receipt_id("../../etc/passwd"))
+        self.assertFalse(rc.is_valid_receipt_id("../sibling"))
+        self.assertFalse(rc.is_valid_receipt_id("/etc/passwd"))
+
+    def test_empty_or_none_is_rejected(self):
+        self.assertFalse(rc.is_valid_receipt_id(""))
+        self.assertFalse(rc.is_valid_receipt_id(None))
+
+
 if __name__ == "__main__":
     unittest.main()

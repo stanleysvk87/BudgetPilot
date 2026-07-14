@@ -16,12 +16,12 @@ get_current_cycle_key, payment event/occurrence) so a future slice can
 move from calendar-month cycles to payday-to-payday cycles without
 reshaping this module.
 """
-import json
 from datetime import date, datetime, timedelta
 
 from forecast import PENDING, PAID_ME, DEFERRED, VALID_STATES
 from obligations import month_key
 from paths import data_dir
+import json_store
 
 DATA = data_dir()
 PAYMENT_EVENTS = DATA / "payment_events.json"
@@ -49,19 +49,11 @@ def get_current_cycle_key(today=None, settings=None):
 
 
 def load_payment_events(path=None):
-    path = path or PAYMENT_EVENTS
-    if not path.exists():
-        return []
-    try:
-        return json.loads(path.read_text())
-    except Exception:
-        return []
+    return json_store.read_json(path or PAYMENT_EVENTS, [])
 
 
 def save_payment_events(events, path=None):
-    path = path or PAYMENT_EVENTS
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(events, indent=2, ensure_ascii=False))
+    json_store.atomic_write_json(path or PAYMENT_EVENTS, events)
 
 
 def get_payment_event(events, payment_id, cycle_key):
