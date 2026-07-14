@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""First-run setup wizard for BudgetPilot.
+"""First-run setup wizard for Saldo.
 
 Balance-first model:
 - current account balance is the source of truth
@@ -79,7 +79,7 @@ SETUP_HTML = """
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>BudgetPilot - prvé nastavenie</title>
+<title>Saldo - prvé nastavenie</title>
 <style>
 :root{
   --bg:#020617; --panel:#111827; --card:#1f2937; --line:#334155;
@@ -131,7 +131,7 @@ button{
 <body>
 <div class="wrap">
   <div class="hero">
-    <h1>BudgetPilot - prvé nastavenie</h1>
+    <h1>Saldo - prvé nastavenie</h1>
     <p>
       Začni aktuálnym stavom účtu a najväčšími pravidelnými platbami.
       Ostatné vieš doplniť neskôr, keď bude základný prehľad sedieť.

@@ -36,6 +36,7 @@ class BalanceFirstSummaryTests(unittest.TestCase):
         bfs.DATA = self.data
         _write(self.data, "settings.json", {"account_balance": 1000})
         _write(self.data, "payments.json", [])
+        _write(self.data, "onetime.json", [])
         _write(self.data, "payment_events.json", [])
         _write(self.data, "envelopes.json", [])
         _write(self.data, "expenses.json", [])
@@ -52,6 +53,14 @@ class BalanceFirstSummaryTests(unittest.TestCase):
         result = bfs.build_balance_first_summary()
         self.assertEqual(result["unpaid_payments_total"], 200)
         self.assertEqual(result["estimated_after_payments"], 800)
+
+    def test_current_month_onetime_payment_reduces_estimate(self):
+        _write(self.data, "onetime.json", [
+            {"id": "ot1", "name": "Servis", "amount": 150, "due_date": TODAY.isoformat()}
+        ])
+        result = bfs.build_balance_first_summary()
+        self.assertEqual(result["unpaid_payments_total"], 150)
+        self.assertEqual(result["estimated_after_payments"], 850)
 
     def test_deferred_payment_to_a_future_month_excluded_from_unpaid_total(self):
         cycle = f"{TODAY.year:04d}-{TODAY.month:02d}"
@@ -125,6 +134,25 @@ class BalanceFirstSummaryTests(unittest.TestCase):
         ])
         result = bfs.build_balance_first_summary()
         self.assertEqual(result["unpaid_payments_total"], 0)
+        self.assertEqual(result["unsettled_paid_total"], 200)
+        self.assertEqual(result["estimated_after_payments"], 800)
+
+    def test_paid_payment_already_adjusted_does_not_reduce_estimate_again(self):
+        _write(self.data, "settings.json", {"account_balance": 800})
+        _write(self.data, "payments.json", [self._payment("p1", 200, TODAY.day)])
+        _write(self.data, "payment_events.json", [
+            {
+                "payment_id": "p1",
+                "cycle_key": f"{TODAY.year:04d}-{TODAY.month:02d}",
+                "state": "paid_me",
+                "main_balance_adjusted": True,
+                "main_balance_delta": -200,
+            }
+        ])
+        result = bfs.build_balance_first_summary()
+        self.assertEqual(result["unpaid_payments_total"], 0)
+        self.assertEqual(result["unsettled_paid_total"], 0)
+        self.assertEqual(result["estimated_after_payments"], 800)
 
     def test_overdue_count(self):
         past_day = max((TODAY - timedelta(days=2)).day, 1) if TODAY.day > 2 else 1

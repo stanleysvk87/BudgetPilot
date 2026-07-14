@@ -28,8 +28,9 @@ tracks what's still coming:
 - **Receipt OCR is local/offline and optional.** Photo upload uses
   Tesseract when installed, then always requires manual review before an
   expense is saved. See [`docs/receipt_ocr.md`](docs/receipt_ocr.md).
-- **No authentication.** It's built for trusted use on your own LAN, not for
-  exposing to the public internet. See [`docs/SECURITY.md`](docs/SECURITY.md).
+- **Optional local password.** Set `BUDGETPILOT_PASSWORD` to protect the web
+  UI with HTTP Basic Auth. Without it, the app is for trusted LAN use only.
+  See [`docs/SECURITY.md`](docs/SECURITY.md).
 
 ## Main features
 
@@ -147,7 +148,7 @@ legacy/                  Older Tkinter prototypes and one-off patch scripts
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — how the pieces fit together
 - [docs/ROADMAP.md](docs/ROADMAP.md) — what's built, what's next
 - [docs/PRIVACY.md](docs/PRIVACY.md) — what data BudgetPilot keeps and where
-- [docs/SECURITY.md](docs/SECURITY.md) — LAN-only assumptions, no auth yet
+- [docs/SECURITY.md](docs/SECURITY.md) — LAN-only assumptions and optional password protection
 - [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) — how to contribute safely
 - [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md) — checks before
   pushing/publishing
@@ -164,9 +165,10 @@ Deeper technical notes on the current rule set already exist in
   [docs/PRIVACY.md](docs/PRIVACY.md)).
 - Nothing in this project sends data anywhere. There is no analytics, no
   telemetry, no third-party API call.
-- There is no login. Anyone who can reach the web UI's address (e.g. anyone
-  on your LAN) can view and edit your data. Keep it off the public internet;
-  use a VPN (WireGuard/Tailscale) for remote access instead.
+- Set `BUDGETPILOT_PASSWORD` before using the web UI on a shared network.
+  Without it, anyone who can reach the web UI's address can view and edit
+  your data. Keep it off the public internet; use a VPN
+  (WireGuard/Tailscale) for remote access instead.
 
 ## License
 

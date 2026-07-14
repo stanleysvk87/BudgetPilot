@@ -140,8 +140,9 @@ you type in on payday wins, always.
 
 - No bank integration — balances are entered by hand.
 - No AI.
-- No OCR (receipt/bill scanning may be considered later, not now).
+- Receipt OCR is optional and local-only.
 - No cloud sync — everything lives in local JSON files.
-- No authentication — this app is for LAN use on a trusted home network.
+- Optional Basic Auth is available via `BUDGETPILOT_PASSWORD`; without it,
+  the app is for trusted LAN use only.
 - No database — the data model stays small, backwards-compatible JSON
   until the current approach actually can't keep up.

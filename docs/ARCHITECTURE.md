@@ -56,7 +56,8 @@ introduced by this documentation pass.
 - Data is plain JSON any text editor can read — nothing proprietary or
   binary.
 - The web server binds `0.0.0.0` so it's reachable on your LAN (e.g. from a
-  phone), but has no authentication — see [SECURITY.md](SECURITY.md).
+  phone). Optional Basic Auth is available through `BUDGETPILOT_PASSWORD`;
+  see [SECURITY.md](SECURITY.md).
 
 ## Historical files
 

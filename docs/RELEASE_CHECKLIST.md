@@ -59,7 +59,7 @@ Check these files after any behavior change:
 - [README.md](../README.md) — quick explanation and startup path
 - [docs/QUICKSTART.md](QUICKSTART.md) — first two minutes
 - [docs/INSTALL.md](INSTALL.md) — setup and troubleshooting
-- [docs/SECURITY.md](SECURITY.md) — LAN-only/no-auth warning
+- [docs/SECURITY.md](SECURITY.md) — LAN-only assumptions and optional password protection
 - [docs/PRIVACY.md](PRIVACY.md) — local data and gitignore behavior
 - [docs/DATA_MODEL.md](DATA_MODEL.md) — JSON shape
 - [docs/ROADMAP.md](ROADMAP.md) — current status, not wishful thinking
@@ -86,10 +86,12 @@ smallest possible public tree.
 
 ## Security Position
 
-BudgetPilot currently has no login, CSRF protection, or public-internet
-hardening. Public release notes should say plainly:
+BudgetPilot/Saldo has optional HTTP Basic Auth via `BUDGETPILOT_PASSWORD`,
+but no CSRF protection or public-internet hardening. Public release notes
+should say plainly:
 
 - run it only on a trusted LAN or behind a VPN
+- set `BUDGETPILOT_PASSWORD` on shared networks
 - do not port-forward it
 - do not expose it through a public tunnel
 - remote access should use WireGuard/Tailscale or equivalent private VPN

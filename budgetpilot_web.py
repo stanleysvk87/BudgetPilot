@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
+import hmac
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -7,7 +9,7 @@ import uuid
 from pathlib import Path
 from datetime import date, datetime
 from urllib.parse import urlparse
-from flask import Flask, abort, request, redirect, render_template_string, send_file
+from flask import Flask, abort, jsonify, request, redirect, render_template, send_file, Response
 
 import obligations as ob
 import receipts
@@ -15,6 +17,7 @@ import payment_events as pe
 import envelopes as env
 import budgetpilot as bp
 import audit_log
+import balance_first_summary as bfs
 from forecast import payment_state, PENDING, PAID_ME, PAID_OTHER, PAID_RESERVE, DEFERRED
 from paths import app_base, data_dir
 
@@ -30,6 +33,8 @@ DEBTS = DATA / "debts.json"
 ONETIME = DATA / "onetime.json"
 RECEIPTS_DIR = DATA / "receipts"
 AUDIT_LOG_PATH = DATA / "audit_log.json"
+ALLOWED_RECEIPT_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"}
+MAX_UPLOAD_BYTES = 16 * 1024 * 1024
 
 AUDIT_ACTION_LABEL = {
     "balance_updated": "Stav účtu upravený",
@@ -38,6 +43,8 @@ AUDIT_ACTION_LABEL = {
     "envelope_amount_changed": "Suma obálky upravená",
     "ocr_expense_saved": "Výdavok z účtenky uložený",
     "expense_added": "Výdavok pridaný",
+    "full_reset": "Aplikácia vyčistená",
+    "backup_restored": "Záloha obnovená",
 }
 
 
@@ -68,7 +75,49 @@ MONTH_NAME_SK = {
 
 DATA.mkdir(parents=True, exist_ok=True)
 app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
 
+def _auth_password():
+    return os.environ.get("BUDGETPILOT_PASSWORD", "").strip()
+
+def _auth_username():
+    return os.environ.get("BUDGETPILOT_USER", "saldo").strip() or "saldo"
+
+def _auth_enabled():
+    return bool(_auth_password())
+
+@app.before_request
+def require_basic_auth():
+    password = _auth_password()
+    if not password:
+        return None
+    auth = request.authorization
+    if auth and hmac.compare_digest(auth.username or "", _auth_username()) and hmac.compare_digest(auth.password or "", password):
+        return None
+    return Response(
+        "Vyžaduje sa prihlásenie.\n",
+        401,
+        {"WWW-Authenticate": 'Basic realm="Saldo", charset="UTF-8"'},
+    )
+
+@app.after_request
+def add_security_headers(response):
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "same-origin")
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'self'; "
+        "img-src 'self' data: blob:; "
+        "style-src 'self' 'unsafe-inline'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "form-action 'self'; "
+        "frame-ancestors 'none'; "
+        "base-uri 'self'",
+    )
+    return response
+
+bfs.DATA = DATA
 from balance_first_summary import register_balance_first_summary
 register_balance_first_summary(app)
 
@@ -138,14 +187,84 @@ DEBT_DIRECTION_LABEL = {
 
 def load(path, default):
     if not path.exists():
-        path.write_text(json.dumps(default, indent=2, ensure_ascii=False))
+        save(path, default)
     try:
-        return json.loads(path.read_text())
+        return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return default
 
 def save(path, data):
-    path.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        with tmp.open("w", encoding="utf-8") as f:
+            f.write(json.dumps(data, indent=2, ensure_ascii=False))
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+        tmp.replace(path)
+        try:
+            dir_fd = os.open(str(path.parent), os.O_DIRECTORY)
+        except OSError:
+            dir_fd = None
+        if dir_fd is not None:
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
+
+def _payment_amount_and_label(payment_id):
+    for path in (PAYMENTS, ONETIME):
+        for item in load(path, []):
+            if item.get("id") == payment_id:
+                return float(item.get("amount", 0) or 0), (item.get("name") or payment_id)
+    return 0.0, payment_id
+
+def _shift_main_balance(delta):
+    if not delta:
+        return None
+    settings = load(SETTINGS, {"account_balance": 0, "real_balance": 0})
+    current = float(settings.get("account_balance", settings.get("real_balance", 0)) or 0)
+    updated = round(current + delta, 2)
+    settings["account_balance"] = updated
+    settings["real_balance"] = updated
+    settings["last_manual_review"] = datetime.now().isoformat(timespec="seconds")
+    save(SETTINGS, settings)
+    return updated
+
+def _set_payment_state_event(payment_id, cycle_key, new_state, amount=None):
+    """Set a cycle-scoped payment state and keep main-account balance in
+    sync for web "paid from account" actions.
+
+    The forecast treats paid_me as already reflected in the current bank
+    balance. In the UI, users normally click "Zaplatené" at the moment
+    they pay, so the app must subtract that payment from the stored manual
+    balance once, and only once.
+    """
+    events = pe.load_payment_events()
+    existing = pe.get_payment_event(events, payment_id, cycle_key)
+    previous_state = existing.get("state", PENDING) if existing else PENDING
+    adjusted_before = bool(existing and existing.get("main_balance_adjusted"))
+    previous_delta = float(existing.get("main_balance_delta", 0) or 0) if existing else 0.0
+
+    if amount is None:
+        amount, _ = _payment_amount_and_label(payment_id)
+    amount = float(amount or 0)
+
+    balance_delta, should_mark_adjusted, stored_delta = _event_balance_delta(existing, new_state, amount)
+
+    events = pe.set_payment_event(events, payment_id, cycle_key, new_state)
+    event = pe.get_payment_event(events, payment_id, cycle_key)
+    if event and should_mark_adjusted:
+        event["main_balance_adjusted"] = True
+        event["main_balance_delta"] = round(stored_delta, 2)
+
+    _shift_main_balance(balance_delta)
+    pe.save_payment_events(events)
+    return balance_delta
 
 def go_home():
     """Return to whichever view the action was submitted from (e.g. an
@@ -200,6 +319,446 @@ def parse_dash(core):
         d["status_class"] = "ok"
     return d
 
+def eur(value):
+    return f"{float(value or 0):.2f} €"
+
+def value_class(value):
+    value = float(value or 0)
+    if value < 0:
+        return "bad"
+    if value == 0:
+        return "warn"
+    return "ok"
+
+def _event_balance_delta(existing, new_state, amount):
+    previous_state = existing.get("state", PENDING) if existing else PENDING
+    adjusted_before = bool(existing and existing.get("main_balance_adjusted"))
+    previous_delta = float(existing.get("main_balance_delta", 0) or 0) if existing else 0.0
+
+    if new_state == PAID_ME and not adjusted_before and amount > 0:
+        return -amount, True, -amount
+    if new_state != PAID_ME and previous_state == PAID_ME and adjusted_before:
+        return (-previous_delta if previous_delta else amount), False, 0.0
+    return 0.0, adjusted_before, previous_delta
+
+def _event_holdback_category(state, event, cycle_key):
+    if state == PAID_ME:
+        return None if bool(event and event.get("main_balance_adjusted")) else "unsettled"
+    if state == PENDING:
+        return "unpaid" if cycle_key == pe.get_current_cycle_key(date.today()) else None
+    if state == DEFERRED:
+        deferred_to = str(event.get("deferred_to") if event else "" or "")
+        if len(deferred_to) >= 7 and deferred_to[:7] <= pe.get_current_cycle_key(date.today()):
+            return "unpaid"
+    return None
+
+def _cleanup_payment_events(payment_id):
+    events = pe.load_payment_events()
+    kept = [e for e in events if e.get("payment_id") != payment_id]
+    if len(kept) != len(events):
+        pe.save_payment_events(kept)
+
+def _item_for_action_path(action_path, form):
+    path = urlparse(action_path).path
+    match = re.fullmatch(r"/(payment|onetime)/(state|delete)/(\d+)", path)
+    if match:
+        kind, action, raw_i = match.groups()
+        data_path = PAYMENTS if kind == "payment" else ONETIME
+        data = load(data_path, [])
+        i = int(raw_i)
+        if i >= len(data) or not data[i].get("id"):
+            return None
+        item = data[i]
+        return {
+            "kind": kind,
+            "action": action,
+            "payment_id": item.get("id"),
+            "cycle_key": pe.get_current_cycle_key(date.today()),
+            "state": form.get("state", PENDING),
+            "amount": float(item.get("amount", 0) or 0),
+            "label": item.get("name") or item.get("id"),
+        }
+
+    if path == "/payment/state/by-id":
+        payment_id = form.get("payment_id", "").strip()
+        if not payment_id:
+            return None
+        amount, label = _payment_amount_and_label(payment_id)
+        return {
+            "kind": "payment",
+            "action": "state",
+            "payment_id": payment_id,
+            "cycle_key": form.get("cycle_key", "").strip() or pe.get_current_cycle_key(date.today()),
+            "state": form.get("state", PENDING),
+            "amount": amount,
+            "label": label,
+        }
+
+    return None
+
+def _payment_action_impact(action_path, form):
+    target = _item_for_action_path(action_path, form)
+    if not target or target["amount"] <= 0:
+        return None
+
+    before = bfs.build_balance_first_summary()
+    amount = float(target["amount"])
+    events = pe.load_payment_events()
+    event = pe.get_payment_event(events, target["payment_id"], target["cycle_key"])
+    current_state = event.get("state", PENDING) if event else PENDING
+    before_category = _event_holdback_category(current_state, event, target["cycle_key"])
+
+    balance_delta = 0.0
+    after_category = None
+    action_label = "Zmazať platbu" if target["action"] == "delete" else "Zmeniť stav platby"
+
+    if target["action"] == "state":
+        new_state = target["state"]
+        if new_state not in SELECTABLE_STATES:
+            return None
+        balance_delta, adjusted_after, stored_delta = _event_balance_delta(event, new_state, amount)
+        simulated_event = {"state": new_state}
+        if adjusted_after:
+            simulated_event["main_balance_adjusted"] = True
+            simulated_event["main_balance_delta"] = stored_delta
+        after_category = _event_holdback_category(new_state, simulated_event, target["cycle_key"])
+        action_label = f"Nastaviť: {STATE_LABEL.get(new_state, new_state)}"
+
+    before_holdback = amount if before_category in {"unpaid", "unsettled"} else 0.0
+    after_holdback = amount if after_category in {"unpaid", "unsettled"} else 0.0
+
+    after_balance = round(before["current_balance"] + balance_delta, 2)
+    after_unpaid = round(
+        before["unpaid_payments_total"]
+        - (amount if before_category == "unpaid" else 0.0)
+        + (amount if after_category == "unpaid" else 0.0),
+        2,
+    )
+    after_unsettled = round(
+        before.get("unsettled_paid_total", 0.0)
+        - (amount if before_category == "unsettled" else 0.0)
+        + (amount if after_category == "unsettled" else 0.0),
+        2,
+    )
+    after_estimate = round(
+        before["estimated_after_payments_and_envelopes"] + balance_delta + before_holdback - after_holdback,
+        2,
+    )
+
+    return {
+        "label": target["label"],
+        "action_label": action_label,
+        "before": {
+            "current_balance": before["current_balance"],
+            "unpaid_payments_total": before["unpaid_payments_total"],
+            "unsettled_paid_total": before.get("unsettled_paid_total", 0.0),
+            "estimated_after_payments_and_envelopes": before["estimated_after_payments_and_envelopes"],
+        },
+        "after": {
+            "current_balance": after_balance,
+            "unpaid_payments_total": after_unpaid,
+            "unsettled_paid_total": after_unsettled,
+            "estimated_after_payments_and_envelopes": after_estimate,
+        },
+    }
+
+def _impact_message(impact):
+    before = impact["before"]
+    after = impact["after"]
+    return "\n".join([
+        f"{impact['action_label']}: {impact['label']}",
+        "",
+        f"Stav účtu: {eur(before['current_balance'])} -> {eur(after['current_balance'])}",
+        f"Ešte treba zaplatiť: {eur(before['unpaid_payments_total'])} -> {eur(after['unpaid_payments_total'])}",
+        f"Zaplatené mimo zostatku: {eur(before['unsettled_paid_total'])} -> {eur(after['unsettled_paid_total'])}",
+        f"Reálne k dispozícii: {eur(before['estimated_after_payments_and_envelopes'])} -> {eur(after['estimated_after_payments_and_envelopes'])}",
+        "",
+        "Pokračovať?",
+    ])
+
+def _debug_balance_context():
+    summary = bfs.build_balance_first_summary()
+    payments = load(PAYMENTS, [])
+    onetime = load(ONETIME, [])
+    settings = load(SETTINGS, {})
+    events = pe.load_payment_events()
+    known_ids = {
+        item.get("id")
+        for item in payments + onetime
+        if isinstance(item, dict) and item.get("id")
+    }
+    orphan_events = [
+        e for e in events
+        if isinstance(e, dict) and e.get("payment_id") not in known_ids
+    ]
+    invalid_payments = [
+        item for item in payments + onetime
+        if isinstance(item, dict) and float(item.get("amount", 0) or 0) <= 0
+    ]
+    return {
+        "summary": summary,
+        "settings": settings,
+        "payments": payments,
+        "onetime": onetime,
+        "events": events,
+        "orphan_events": orphan_events,
+        "invalid_payments": invalid_payments,
+    }
+
+def _build_problem_reports(ctx):
+    summary = ctx["summary"]
+    problems = []
+
+    def add(severity, title, problem, impact, suggestion, action_href=None, action_label=None, details=None):
+        problems.append({
+            "severity": severity,
+            "title": title,
+            "problem": problem,
+            "impact": impact,
+            "suggestion": suggestion,
+            "action_href": action_href,
+            "action_label": action_label,
+            "details": details or [],
+        })
+
+    if summary.get("missing_after_everything", 0) > 0:
+        add(
+            "critical",
+            "Reálny odhad je v mínuse",
+            f"Po otvorených platbách a obálkach chýba {eur(summary['missing_after_everything'])}.",
+            "Ak nič nezmeníš, plán v aktuálnom cykle nevychádza.",
+            "Najprv vyrieš platby po splatnosti alebo čoskoro splatné. Potom skontroluj obálky a aktuálny stav účtu.",
+            "/payments",
+            "Otvoriť platby",
+        )
+
+    overdue_items = [p for p in summary.get("unpaid_payment_items", []) if p.get("overdue")]
+    if overdue_items:
+        add(
+            "critical",
+            "Platby po splatnosti",
+            f"{len(overdue_items)} platba/platby majú termín v minulosti.",
+            "Tieto položky môžu skresľovať dostupné peniaze a vyžadujú rozhodnutie.",
+            "Označ ich ako zaplatené, ak už odišli z účtu, alebo ich odlož na konkrétny dátum.",
+            "/payments#payment-inbox",
+            "Riešiť v inboxe",
+            [f"{p.get('name')} · {eur(p.get('amount'))} · {p.get('due_date')}" for p in overdue_items[:5]],
+        )
+
+    unsettled = summary.get("unsettled_paid_items", [])
+    if unsettled:
+        add(
+            "warning",
+            "Zaplatené mimo zostatku",
+            f"{len(unsettled)} zaplatená platba ešte nie je premietnutá v uloženom stave účtu.",
+            f"Pre istotu sa v odhade drží bokom {eur(summary.get('unsettled_paid_total'))}.",
+            "Ak platba odišla z hlavného účtu, zúčtuj ju v platbách alebo uprav aktuálny stav účtu podľa banky.",
+            "/payments#zaplatene",
+            "Skontrolovať zaplatené",
+            [f"{p.get('name')} · {eur(p.get('amount'))}" for p in unsettled[:5]],
+        )
+
+    over_envelopes = [e for e in summary.get("envelope_items", []) if float(e.get("over", 0) or 0) > 0]
+    if over_envelopes:
+        add(
+            "warning",
+            "Prekročené obálky",
+            f"{len(over_envelopes)} obálka/obálky sú nad limitom.",
+            f"Prekročenie spolu: {eur(summary.get('envelopes_over_total'))}.",
+            "Navýš limit obálky, presuň výdavok do správnej kategórie alebo zníž plán na zvyšok mesiaca.",
+            "/envelopes",
+            "Otvoriť obálky",
+            [f"{e.get('name')} · prekročené o {eur(e.get('over'))}" for e in over_envelopes[:5]],
+        )
+
+    if ctx.get("orphan_events"):
+        add(
+            "warning",
+            "Stavy bez existujúcej platby",
+            f"{len(ctx['orphan_events'])} payment event odkazuje na platbu, ktorá už neexistuje.",
+            "Historický stav môže miasť diagnostiku a budúce výpočty.",
+            "Ak nejde o zámer, vyčisti staré záznamy v payment_events.json alebo obnov chýbajúcu platbu zo zálohy.",
+            "/debug/balance",
+            "Otvoriť diagnostiku",
+            [str(e.get("payment_id")) for e in ctx["orphan_events"][:8]],
+        )
+
+    if ctx.get("invalid_payments"):
+        add(
+            "warning",
+            "Platby s neplatnou sumou",
+            f"{len(ctx['invalid_payments'])} platba má nulovú alebo zápornú sumu.",
+            "Takáto položka sa nezapočíta do odhadu, aj keď môže vyzerať ako aktívna platba.",
+            "Uprav sumu alebo položku zmaž v správe platieb.",
+            "/payments",
+            "Upraviť platby",
+            [f"{p.get('name') or p.get('id')} · {p.get('amount')}" for p in ctx["invalid_payments"][:8]],
+        )
+
+    if not summary.get("last_manual_review") and float(summary.get("current_balance", 0) or 0) == 0:
+        add(
+            "info",
+            "Chýba ručná kontrola účtu",
+            "Stav účtu je 0 € a aplikácia nemá uloženú poslednú manuálnu kontrolu.",
+            "Reálny odhad nemusí sedieť s bankou.",
+            "Zadaj aktuálny stav účtu podľa banky.",
+            "/#balance-update-field",
+            "Upraviť stav účtu",
+        )
+
+    if not problems:
+        add(
+            "ok",
+            "Nenašiel som žiadny konkrétny problém",
+            "Dáta neobsahujú po splatnosti, záporný odhad, orphan eventy ani neplatné sumy.",
+            "Stále sa oplatí porovnať stav účtu s bankou.",
+            "Pokračuj v bežnej kontrole platieb a výdavkov.",
+            "/",
+            "Späť na prehľad",
+        )
+
+    severity_order = {"critical": 0, "warning": 1, "info": 2, "ok": 3}
+    return sorted(problems, key=lambda p: severity_order.get(p["severity"], 9))
+
+BACKUP_NAME_RE = re.compile(r"^\d{8}-\d{6}-(full-reset|pre-restore)(-[a-f0-9]{6})?$")
+
+def _backup_root():
+    return BASE / "backups"
+
+def _dir_size(path):
+    total = 0
+    if not path.exists():
+        return 0
+    for root, _, files in os.walk(path):
+        for name in files:
+            try:
+                total += (Path(root) / name).stat().st_size
+            except OSError:
+                pass
+    return total
+
+def _format_bytes(size):
+    size = float(size or 0)
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024 or unit == "GB":
+            return f"{size:.1f} {unit}" if unit != "B" else f"{int(size)} B"
+        size /= 1024
+    return f"{size:.1f} GB"
+
+def _create_data_backup(reason):
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    backup_dir = _backup_root() / f"{ts}-{reason}"
+    if backup_dir.exists():
+        backup_dir = backup_dir.with_name(f"{backup_dir.name}-{uuid.uuid4().hex[:6]}")
+    shutil.copytree(DATA, backup_dir / "data")
+    return backup_dir
+
+def _list_backups(limit=6):
+    root = _backup_root()
+    if not root.exists():
+        return []
+    rows = []
+    for item in root.iterdir():
+        if not item.is_dir() or not BACKUP_NAME_RE.fullmatch(item.name):
+            continue
+        data_path = item / "data"
+        if not data_path.is_dir():
+            continue
+        try:
+            created = datetime.strptime(item.name[:15], "%Y%m%d-%H%M%S")
+            created_label = created.strftime("%Y-%m-%d %H:%M")
+        except ValueError:
+            created_label = item.name[:15]
+        rows.append({
+            "name": item.name,
+            "kind": "Pred obnovou" if "pre-restore" in item.name else "Pred resetom",
+            "created": created_label,
+            "size": _format_bytes(_dir_size(data_path)),
+        })
+    rows.sort(key=lambda b: b["name"], reverse=True)
+    return rows[:limit]
+
+def _resolve_backup_dir(name):
+    name = (name or "").strip()
+    if not BACKUP_NAME_RE.fullmatch(name):
+        return None
+    root = _backup_root().resolve()
+    candidate = (_backup_root() / name).resolve()
+    if candidate.parent != root:
+        return None
+    if not (candidate / "data").is_dir():
+        return None
+    return candidate
+
+def _restore_backup(name):
+    backup_dir = _resolve_backup_dir(name)
+    if not backup_dir:
+        return None
+    pre_restore = _create_data_backup("pre-restore")
+    tmp_restore = DATA.with_name(f".{DATA.name}.restore.{uuid.uuid4().hex}")
+    shutil.copytree(backup_dir / "data", tmp_restore)
+    if DATA.exists():
+        shutil.rmtree(DATA)
+    tmp_restore.replace(DATA)
+    return backup_dir, pre_restore
+
+def _build_system_status(problem_reports, backups, setup_needed, settings):
+    rows = []
+
+    active_problem_count = len([p for p in problem_reports if p.get("severity") != "ok"])
+    rows.append({
+        "state": "ok" if active_problem_count == 0 else "warn",
+        "label": "Diagnostika dát",
+        "detail": "Bez aktívnych problémov." if active_problem_count == 0 else f"{active_problem_count} vecí vyžaduje kontrolu.",
+        "action_href": "/problems",
+        "action_label": "Otvoriť",
+    })
+
+    last_review = settings.get("last_manual_review")
+    rows.append({
+        "state": "ok" if last_review else "warn",
+        "label": "Stav účtu",
+        "detail": f"Posledná kontrola: {last_review[:16].replace('T', ' ')}" if last_review else "Zadaj stav účtu podľa banky.",
+        "action_href": "/#balance-update-field",
+        "action_label": "Upraviť",
+    })
+
+    rows.append({
+        "state": "ok" if backups else "warn",
+        "label": "Záloha",
+        "detail": f"Posledná záloha: {backups[0]['created']}" if backups else "Zatiaľ nie je dostupná žiadna záloha.",
+        "action_href": "#backups",
+        "action_label": "Zobraziť",
+    })
+
+    rows.append({
+        "state": "warn" if setup_needed else "ok",
+        "label": "Prvé nastavenie",
+        "detail": "Chýba základné nastavenie." if setup_needed else "Základné dáta sú pripravené.",
+        "action_href": "/setup" if setup_needed else "/manage",
+        "action_label": "Dokončiť" if setup_needed else "OK",
+    })
+
+    rows.append({
+        "state": "ok" if _auth_enabled() else "warn",
+        "label": "Prístup",
+        "detail": "Web UI je chránené heslom." if _auth_enabled() else "Heslo nie je nastavené. Kto sa dostane na port 8765, vidí dáta.",
+        "action_href": "/manage#system-status",
+        "action_label": "Skontrolované" if _auth_enabled() else "Nastaviť env",
+    })
+
+    state_order = {"bad": 0, "warn": 1, "ok": 2}
+    overall = min((r["state"] for r in rows), key=lambda s: state_order.get(s, 9))
+    return {
+        "overall": overall,
+        "overall_label": {
+            "ok": "Stabilné",
+            "warn": "Vyžaduje kontrolu",
+            "bad": "Problém",
+        }.get(overall, "Neznáme"),
+        "rows": rows,
+    }
+
 def payment_form_from_item(item=None):
     if not item:
         return {"type":"Hypotéka","name":"","amount":"","day":"1","month":"1","year":"2026","frequency":"monthly","every_months":""}
@@ -221,2042 +780,7 @@ def payment_form_from_item(item=None):
         "every_months": item.get("every_months", "")
     }
 
-HTML = """
-<!doctype html>
-<html lang="sk">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>BudgetPilot</title>
-<style>
-:root{--bg:#0f172a;--card:#1f2937;--line:#374151;--text:#e5e7eb;--muted:#9ca3af;--blue:#2563eb;--red:#b91c1c;--green:#22c55e;--orange:#f59e0b}
-*{box-sizing:border-box}
-body{margin:0;background:linear-gradient(135deg,#0f172a,#111827);color:var(--text);font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
-.app{display:grid;grid-template-columns:370px 1fr;gap:18px;padding:18px}
-.table-scroll{overflow-x:auto}
-.sidebar{display:flex;flex-direction:column;gap:14px}
-.card{background:rgba(31,41,55,.95);border:1px solid var(--line);border-radius:18px;padding:18px;box-shadow:0 12px 30px rgba(0,0,0,.25)}
-h1{font-size:28px;margin:0 0 6px} h2{font-size:20px;margin:0 0 14px}
-label{display:block;margin-top:8px;font-size:13px;color:var(--muted)}
-input,select{width:100%;padding:11px 12px;border-radius:12px;border:1px solid #4b5563;background:#0b1220;color:var(--text);margin-top:6px}
-button{padding:10px 14px;border:0;border-radius:12px;background:var(--blue);color:white;font-weight:700;cursor:pointer}
-.danger{background:var(--red)} .secondary{background:#4b5563}
-.btn-row{display:flex;gap:8px;margin-top:10px}.btn-row button{flex:1}
-.topgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:14px}
-.metric .label{font-size:13px;color:var(--muted)} .metric .value{font-size:32px;font-weight:900;margin-top:4px}
-.ok{color:var(--green)} .warn{color:var(--orange)} .bad{color:var(--red)}
-.main{display:flex;flex-direction:column;gap:14px}
-table{width:100%;border-collapse:collapse} th,td{padding:11px 8px;border-bottom:1px solid var(--line);text-align:left;font-size:14px} th{color:var(--muted);font-size:13px}
-.actions{display:flex;gap:6px;justify-content:flex-end}.actions form{margin:0}
-.actions-stack{display:flex;flex-direction:column;gap:6px;align-items:stretch;min-width:160px}.actions-stack form{margin:0}.actions-stack select{margin:0}
-.small{font-size:13px;color:var(--muted);line-height:1.35}.inline{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-pre{white-space:pre-wrap;background:#020617;border:1px solid var(--line);border-radius:14px;padding:14px;overflow:auto;max-height:380px;font-size:13px}
-.badge{display:inline-block;padding:5px 9px;border-radius:999px;font-size:12px;background:#374151}
-.badge.ok{background:#14532d} .badge.warn{background:#78350f} .badge.bad{background:rgba(127,29,29,.65);color:#fecaca}
-
-/* Payment/deferred task cards -- accent-colored per state */
-.view-tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
-.view-tab{display:inline-flex;align-items:center;gap:6px;padding:9px 13px;border-radius:999px;font-size:13px;font-weight:750;background:rgba(148,163,184,.12);color:#e2e8f0;border:1px solid rgba(148,163,184,.2)}
-.view-tab .tab-badge{background:rgba(2,6,23,.4);border-radius:999px;padding:1px 7px;font-size:11px;font-weight:800}
-.view-tab.tab-red{border-color:rgba(239,68,68,.5)} .view-tab.tab-red .tab-badge{color:#fca5a5}
-.view-tab.tab-orange{border-color:rgba(245,158,11,.5)} .view-tab.tab-orange .tab-badge{color:#fbbf24}
-.view-tab.tab-blue{border-color:rgba(37,99,235,.5)} .view-tab.tab-blue .tab-badge{color:#93c5fd}
-.view-tab.tab-green{border-color:rgba(34,197,94,.5)} .view-tab.tab-green .tab-badge{color:#86efac}
-
-.task-card-list{display:flex;flex-direction:column;gap:10px}
-.task-card{border:1px solid rgba(148,163,184,.18);border-left:4px solid rgba(148,163,184,.4);background:rgba(2,6,23,.4);border-radius:14px;padding:13px 14px}
-.task-card.overdue{border-left-color:var(--red);background:rgba(127,29,29,.14)}
-.task-card.soon{border-left-color:var(--orange);background:rgba(120,53,15,.14)}
-.task-card.pending{border-left-color:#2563eb}
-.task-card.deferred{border-left-color:#b45309;background:rgba(120,53,15,.1)}
-.task-card.paid{border-left-color:#16a34a}
-.task-card-head{display:flex;justify-content:space-between;gap:10px;font-weight:800;font-size:15px}
-.task-card-amount{white-space:nowrap}
-.task-card-amount.overdue{color:#fca5a5} .task-card-amount.soon{color:#fbbf24} .task-card-amount.paid{color:#86efac}
-.task-card-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:space-between;margin-top:5px;font-size:12px;color:var(--muted)}
-.task-card-actions{display:flex;gap:8px;margin-top:11px}
-.task-card-actions .paid-quick-form,.task-card-actions .defer-widget{flex:1}
-.task-card-actions .paid-quick-form button{width:100%;background:#16a34a}
-.task-card-actions .defer-widget .defer-toggle{width:100%;background:transparent;border:1px solid rgba(245,158,11,.5);color:#fbbf24}
-.task-card-more{margin-top:8px}
-.task-card-more summary{cursor:pointer;color:var(--muted);font-size:12px;list-style:none}
-a{color:white;text-decoration:none}
-.topnav{display:flex;flex-wrap:wrap;align-items:center;gap:4px 16px;padding:12px 18px;background:rgba(15,23,42,.97);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:10}
-.topnav .brand{font-weight:900;margin-right:8px}
-.topnav a,.topnav .navlink{color:var(--text);text-decoration:none;padding:8px 10px;border-radius:10px;font-size:14px}
-.topnav a:hover{background:var(--line)}
-.topnav .navlink.disabled{color:var(--muted);cursor:default}
-.summarygrid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:14px}
-.summarygrid .metric .value{font-size:26px}
-.section{margin-bottom:14px}
-.urgency-overdue{color:var(--red);font-weight:700}
-.urgency-due_today{color:var(--orange);font-weight:700}
-.urgency-soon{color:var(--orange)}
-.urgency-later{color:var(--muted)}
-details.card summary{cursor:pointer;font-size:20px;font-weight:700}
-@media(max-width:1000px){
-.app{grid-template-columns:1fr;display:flex;flex-direction:column}
-.main{order:1} .sidebar{order:2}
-.topgrid{grid-template-columns:1fr} .summarygrid{grid-template-columns:repeat(2,1fr)}
-}
-@media(max-width:600px){
-.app{padding:10px} table{min-width:560px}
-.topnav{padding:10px 12px;gap:2px 10px} .topnav a,.topnav .navlink{padding:10px 12px;font-size:15px}
-.summarygrid{grid-template-columns:1fr}
-}
-
-/* BP_APP_SHELL_PATCH_V1 */
-/* App-like shell: desktop sidebar menu, mobile drawer, card-first dashboard */
-body{background:radial-gradient(circle at top left,#1e3a8a 0,#0f172a 34%,#020617 100%);min-height:100vh}
-.menu-toggle{display:none;position:fixed;top:12px;left:12px;z-index:60;border:1px solid rgba(255,255,255,.14);background:rgba(15,23,42,.96);box-shadow:0 10px 30px rgba(0,0,0,.35)}
-.drawer-overlay{display:none}
-.topnav{
-  position:fixed;left:0;top:0;bottom:0;width:250px;z-index:50;
-  display:flex;flex-direction:column;align-items:stretch;gap:8px;
-  padding:20px 14px;background:rgba(2,6,23,.96);
-  border-right:1px solid rgba(148,163,184,.20);border-bottom:0;
-  box-shadow:18px 0 45px rgba(0,0,0,.32)
-}
-.topnav .brand{font-size:22px;margin:0 0 14px;padding:10px 12px}
-.topnav a,.topnav .navlink{
-  display:block;padding:12px 14px;border-radius:14px;
-  background:transparent;border:1px solid transparent
-}
-.topnav a:hover{background:rgba(37,99,235,.18);border-color:rgba(96,165,250,.25)}
-.topnav a.active{background:rgba(37,99,235,.32);border-color:rgba(96,165,250,.4);font-weight:800}
-.bottomnav{display:none}
-.app{margin-left:250px;padding:20px;display:flex;flex-direction:column;gap:16px}
-.main{order:1}
-.sidebar{order:2;display:grid;grid-template-columns:repeat(2,minmax(260px,1fr));gap:14px}
-.sidebar>.card:first-child{display:none}
-.card{border-radius:22px;border-color:rgba(148,163,184,.18);box-shadow:0 18px 50px rgba(0,0,0,.28)}
-.summarygrid{grid-template-columns:repeat(4,minmax(0,1fr))}
-.summarygrid .card{min-height:120px}
-.summarygrid .metric .label{text-transform:uppercase;letter-spacing:.04em;font-size:12px}
-.summarygrid .metric .value{font-size:30px}
-.section[id="forecast3m"]{order:90}
-.actions-stack{min-width:0}
-.quick-actions{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px}
-.quick-actions form{margin:0}
-.quick-actions button{font-size:12px;padding:8px 10px;border-radius:999px;background:#334155}
-.quick-actions .pay-main button{background:#14532d}
-.quick-actions .pay-other button{background:#164e63}
-.quick-actions .pay-reserve button{background:#7c2d12}
-.quick-actions .reset button{background:#475569}
-.quick-actions .defer button{background:#78350f}
-@media(max-width:1100px){
-  .summarygrid{grid-template-columns:repeat(2,minmax(0,1fr))}
-  .sidebar{grid-template-columns:1fr}
-}
-@media(max-width:760px){
-  body{padding-top:58px}
-  .menu-toggle{display:block}
-  .drawer-overlay.open{display:block;position:fixed;inset:0;background:rgba(2,6,23,.58);z-index:45}
-  .topnav{transform:translateX(-105%);transition:transform .18s ease;width:min(82vw,310px)}
-  .topnav.open{transform:translateX(0)}
-  .topnav .brand{padding-left:48px}
-  .app{margin-left:0;padding:10px}
-  .summarygrid{grid-template-columns:1fr;gap:10px}
-  .summarygrid .card{min-height:auto;padding:16px}
-  .summarygrid .metric .value{font-size:28px}
-  .main{gap:10px}
-  .card{border-radius:18px;padding:14px}
-  h2{font-size:18px}
-  .table-scroll{overflow:visible}
-  table{min-width:0!important;width:100%;border-collapse:separate;border-spacing:0 10px}
-  thead, th{display:none}
-  tbody, tr, td{display:block;width:100%}
-  tr{background:rgba(15,23,42,.62);border:1px solid rgba(148,163,184,.18);border-radius:16px;padding:10px;margin-bottom:10px}
-  td{border:0;padding:6px 4px;font-size:14px}
-  td::before{content:attr(data-label);display:block;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px}
-  td.actions,td.actions-stack{padding-top:10px}
-  .actions,.actions-stack{justify-content:flex-start;align-items:stretch}
-  .actions form,.actions-stack form{width:100%}
-  .actions button,.actions-stack button{width:100%;margin-top:4px}
-  .quick-actions{display:grid;grid-template-columns:1fr 1fr;gap:7px}
-  .quick-actions button{width:100%;font-size:13px;padding:10px 8px}
-  .actions-stack>form[action*="/payment/state/"], .actions-stack>form[action*="/onetime/state/"]{display:none}
-  .bottomnav{
-    display:flex;position:fixed;left:0;right:0;bottom:0;z-index:55;
-    background:rgba(2,6,23,.97);border-top:1px solid rgba(148,163,184,.2);
-    box-shadow:0 -10px 30px rgba(0,0,0,.35);padding:6px 4px calc(6px + env(safe-area-inset-bottom));
-  }
-  .bottomnav a{
-    flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;
-    padding:8px 2px;border-radius:12px;font-size:11px;color:var(--muted);
-    min-height:52px;justify-content:center;
-  }
-  .bottomnav a.active{color:var(--text);background:rgba(37,99,235,.22)}
-  .bottomnav a[href="/deferred"].active{background:rgba(180,83,9,.28)}
-  .bottomnav a[href="/envelopes"].active{background:rgba(13,148,136,.28)}
-  .bottomnav a[href="/receipts"].active{background:rgba(124,58,237,.28)}
-  .bottomnav .bn-icon{font-size:19px;line-height:1}
-  body{padding-bottom:74px}
-  .sidebar{display:flex;flex-direction:column}
-}
-
-
-
-
-
-/* BP_UX_SAFETY_V2 */
-.safety-review{
-  order:-40;
-  margin-bottom:16px;
-  background:rgba(15,23,42,.94);
-  border:1px solid rgba(148,163,184,.24);
-  border-radius:22px;
-  padding:16px 18px;
-  box-shadow:0 18px 50px rgba(0,0,0,.30)
-}
-.safety-review h2{margin:0 0 4px;font-size:20px}
-.safety-review .hint{color:var(--muted);font-size:13px;margin-bottom:12px;line-height:1.35}
-.safety-review-groups{display:flex;flex-direction:column;gap:14px}
-.safety-review-group-title{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:800;margin-bottom:8px;cursor:default}
-details.safety-review-group summary.safety-review-group-title{cursor:pointer;list-style:none}
-details.safety-review-group summary.safety-review-group-title::-webkit-details-marker{display:none}
-details.safety-review-group summary.safety-review-group-title::before{content:"▸ ";display:inline-block}
-details.safety-review-group[open] summary.safety-review-group-title::before{content:"▾ "}
-.safety-review-list{display:flex;flex-direction:column;gap:8px}
-.safety-review-row{
-  display:grid;
-  grid-template-columns:1fr auto auto auto;
-  align-items:center;
-  gap:10px;
-  padding:10px 12px;
-  border:1px solid rgba(148,163,184,.16);
-  background:rgba(2,6,23,.46);
-  border-radius:14px
-}
-.safety-review-row.overdue{
-  border-color:rgba(239,68,68,.78);
-  background:rgba(127,29,29,.32)
-}
-.safety-review-row.due-soon{
-  border-color:rgba(245,158,11,.78);
-  background:rgba(120,53,15,.28)
-}
-.safety-review-name{font-weight:850}
-.safety-review-sum{font-weight:900;white-space:nowrap}
-.safety-review-due{
-  font-size:12px;
-  color:var(--muted);
-  white-space:nowrap;
-}
-.safety-review-row.overdue .safety-review-due{
-  color:#fecaca;
-  font-weight:800;
-}
-.safety-review-row.due-soon .safety-review-due{
-  color:#fed7aa;
-  font-weight:800;
-}
-.safety-review-row.deferred{
-  border-color:rgba(245,158,11,.4);
-  background:rgba(120,53,15,.16);
-  opacity:.9;
-}
-.safety-review-row.paid{
-  border-color:rgba(34,197,94,.4);
-  background:rgba(20,83,45,.18);
-  opacity:.85;
-}
-.safety-review-row .badge.warn{background:rgba(120,53,15,.6);color:#fed7aa}
-.safety-review-row .badge.ok{background:rgba(20,83,45,.6);color:#bbf7d0}
-.safety-review-x{
-  width:34px;
-  height:34px;
-  border-radius:999px;
-  display:inline-flex;
-  align-items:center;
-  justify-content:center;
-  font-weight:900;
-  background:rgba(127,29,29,.94);
-  color:#fee2e2;
-  border:1px solid rgba(255,255,255,.18)
-}
-.safety-review-actions form{margin:0}
-.safety-review-actions button{
-  border-radius:999px;
-  padding:8px 12px;
-  font-size:12px;
-  background:#166534
-}
-.last-update-card{
-  order:-41;
-  margin-bottom:12px;
-  border:1px solid rgba(148,163,184,.20);
-  background:rgba(15,23,42,.74);
-  border-radius:18px;
-  padding:12px 14px;
-  color:var(--muted);
-  font-size:13px;
-}
-.last-update-card strong{color:var(--text)}
-.metric .label.warning-label{color:#fbbf24!important}
-.metric .label.projection-label{color:#93c5fd!important}
-@media(max-width:760px){
-  .safety-review{border-radius:18px;padding:14px;margin-bottom:10px}
-  .safety-review-row{
-    grid-template-columns:1fr auto 36px;
-    gap:8px
-  }
-  .safety-review-due{grid-column:1 / -1}
-  .safety-review-actions{grid-column:1 / -1}
-  .safety-review-actions form{width:100%}
-  .safety-review-actions button{width:100%;padding:11px 8px}
-}
-
-
-/* BP_BALANCE_FIRST_V1 */
-.balance-first-note{
-  order:-50;
-  margin-bottom:12px;
-  border:1px solid rgba(59,130,246,.30);
-  background:rgba(30,64,175,.18);
-  border-radius:18px;
-  padding:12px 14px;
-  color:#dbeafe;
-  font-size:13px;
-}
-.balance-first-note strong{color:#fff}
-.hidden-income-card{display:none!important}
-
-
-/* BP_EDITABLE_ENVELOPES_V1 */
-.editable-envelopes{
-  order:-70;
-  margin-bottom:16px;
-  background:rgba(15,23,42,.92);
-  border:1px solid rgba(148,163,184,.24);
-  border-radius:22px;
-  padding:16px 18px;
-  box-shadow:0 18px 50px rgba(0,0,0,.28)
-}
-.editable-envelopes h2{margin:0 0 4px;font-size:20px}
-.editable-envelopes .hint{color:var(--muted);font-size:13px;margin-bottom:12px;line-height:1.35}
-.envelope-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px}
-.envelope-card{border:1px solid rgba(148,163,184,.18);background:rgba(2,6,23,.46);border-radius:16px;padding:14px}
-.envelope-card.warn{border-color:rgba(245,158,11,.6)}
-.envelope-card.over{border-color:rgba(239,68,68,.75);background:rgba(127,29,29,.22)}
-.envelope-card-head{display:flex;justify-content:space-between;align-items:baseline;gap:8px;font-weight:850}
-.envelope-card-title{display:flex;align-items:center;gap:9px}
-.envelope-card-icon{width:34px;height:34px;border-radius:50%;background:rgba(45,212,191,.16);display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0}
-.envelope-card.warn .envelope-card-icon{background:rgba(251,191,36,.16)}
-.envelope-card.over .envelope-card-icon{background:rgba(239,68,68,.18)}
-.envelope-card-name{font-size:16px}
-.envelope-card-remaining{font-size:13px;color:#5eead4;white-space:nowrap}
-.envelope-card.warn .envelope-card-remaining{color:#fbbf24}
-.envelope-card.over .envelope-card-remaining{color:#fca5a5}
-.envelope-progress-bar{height:9px;border-radius:999px;background:rgba(2,6,23,.6);overflow:hidden;margin-top:9px}
-.envelope-progress-fill{height:100%;background:#2dd4bf;border-radius:999px}
-.envelope-progress-fill.warn{background:#fbbf24}
-.envelope-progress-fill.over{background:#ef4444}
-.envelope-card-sub{margin-top:8px;font-size:12px;color:var(--muted)}
-.envelope-card-over{margin-top:6px;font-size:12px;font-weight:800;color:#fca5a5}
-.envelope-card-actions{display:flex;gap:8px;margin-top:10px}
-.envelope-card-btn{flex:1;text-align:center;padding:9px 10px;border-radius:12px;background:#0f766e;color:white;text-decoration:none;font-size:13px;font-weight:750;border:0;cursor:pointer}
-.envelope-card-btn.secondary{background:rgba(148,163,184,.18);color:#e2e8f0}
-.defer-widget{display:inline-block}
-.defer-form{margin-top:8px;padding:10px 12px;border:1px solid rgba(245,158,11,.4);background:rgba(120,53,15,.16);border-radius:12px;min-width:220px}
-.defer-form label{display:block;color:var(--muted);font-size:12px;margin-bottom:5px}
-.defer-form .defer-date-input{width:100%;padding:9px 10px;border-radius:10px;margin-bottom:8px}
-.defer-quick-row{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
-button.tiny.defer-quick{padding:6px 9px;font-size:11px;border-radius:999px;background:rgba(148,163,184,.2);color:#e2e8f0;border:0;cursor:pointer}
-.defer-form .btn-row{margin-top:0}
-
-/* Dashboard summary cards -- short overview only, full lists live in their own views */
-.summary-card h2{margin-bottom:10px}
-.summary-card-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:10px}
-.summary-card-head h2{margin-bottom:0}
-.summary-card-link{font-size:12px;color:#93c5fd;font-weight:700;white-space:nowrap}
-.summary-card .btn-row,.summary-card>a{margin-top:12px;display:block}
-.summary-card>a button{width:100%}
-.summary-stats{display:flex;flex-wrap:wrap;gap:14px;margin-bottom:6px}
-.summary-stats .stat{min-width:70px}
-.summary-stats .stat-value{font-size:22px;font-weight:900}
-.summary-stats .stat-value.bad{color:var(--red)}
-.summary-stats .stat-value.warn{color:var(--orange)}
-.summary-stats .stat-value.teal{color:#5eead4}
-.summary-stats .stat-label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
-.deferred-mini-list,.deferred-detail-list{display:flex;flex-direction:column;gap:6px;margin-top:8px}
-.deferred-mini-row{display:flex;justify-content:space-between;gap:10px;font-size:13px;padding:6px 0;border-bottom:1px solid rgba(148,163,184,.12)}
-.deferred-mini-row:last-child{border-bottom:0}
-.deferred-summary{border-left:4px solid #b45309;background:linear-gradient(160deg,rgba(120,53,15,.16),rgba(31,41,55,.92))}
-.envelopes-summary-dashboard{border-left:4px solid #0f766e}
-.payments-summary{border-left:4px solid #2563eb}
-.activity-summary{border-left:4px solid #64748b}
-.deferred-detail-row{border:1px solid rgba(148,163,184,.18);background:rgba(2,6,23,.4);border-radius:14px;padding:12px 14px}
-.deferred-detail-row.overdue{border-color:rgba(239,68,68,.7);background:rgba(127,29,29,.22)}
-.deferred-detail-head{display:flex;justify-content:space-between;gap:10px;font-weight:800;margin-bottom:4px}
-.deferred-detail-row .pay-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
-.danger-zone{border-color:rgba(239,68,68,.5);background:rgba(127,29,29,.12)}
-.danger-zone summary{color:#fca5a5;font-weight:800}
-.danger-zone #reset-confirm-input{border-color:rgba(239,68,68,.5)}
-.danger-zone button.danger:disabled{opacity:.4;cursor:not-allowed}
-.edit-target-flash{animation:bp-edit-flash 2.2s ease-out}
-@keyframes bp-edit-flash{
-  0%{box-shadow:0 0 0 3px rgba(37,99,235,.9);border-color:rgba(96,165,250,.9)}
-  100%{box-shadow:0 0 0 0 rgba(37,99,235,0)}
-}
-.envelope-edit-row{
-  display:grid;
-  grid-template-columns:1fr 1fr;
-  align-items:end;
-  gap:10px;
-  padding:10px 0 0;
-  margin-top:10px;
-  border-top:1px solid rgba(148,163,184,.16);
-}
-.envelope-edit-row label{
-  display:block;
-  color:var(--muted);
-  font-size:12px;
-  margin-bottom:5px
-}
-.envelope-edit-row input{
-  width:100%;
-  padding:10px 11px;
-  border-radius:12px;
-}
-.envelope-edit-row button{
-  width:100%;
-  border-radius:12px;
-  padding:10px 11px;
-}
-@media(max-width:760px){
-  .editable-envelopes{border-radius:18px;padding:14px}
-  .envelope-grid{grid-template-columns:1fr}
-}
-
-
-/* BP_TOP_REVIEW_DEFER_V1 */
-.safety-review-actions,
-.unpaid-confirm-actions,
-.manual-confirm-actions{
-  display:flex;
-  gap:6px;
-  flex-wrap:wrap;
-  justify-content:flex-end;
-}
-.safety-review-actions form,
-.unpaid-confirm-actions form,
-.manual-confirm-actions form{
-  margin:0;
-}
-.safety-review-actions form.bp-defer-form button,
-.unpaid-confirm-actions form.bp-defer-form button,
-.manual-confirm-actions form.bp-defer-form button{
-  background:#92400e!important;
-}
-.safety-review-actions form.bp-paid-form button,
-.unpaid-confirm-actions form.bp-paid-form button,
-.manual-confirm-actions form.bp-paid-form button{
-  background:#166534!important;
-}
-@media(max-width:760px){
-  .safety-review-actions,
-  .unpaid-confirm-actions,
-  .manual-confirm-actions{
-    justify-content:stretch;
-  }
-  .safety-review-actions form,
-  .unpaid-confirm-actions form,
-  .manual-confirm-actions form{
-    flex:1 1 48%;
-  }
-  .safety-review-actions button,
-  .unpaid-confirm-actions button,
-  .manual-confirm-actions button{
-    width:100%;
-  }
-}
-
-
-
-/* BP_TOP_REAL_OVERVIEW_V5 */
-.bp-hide-old-metrics{display:none!important}
-.real-top{
-  order:-300;margin-bottom:16px;
-  background:linear-gradient(135deg,rgba(15,23,42,.98),rgba(30,64,175,.45));
-  border:1px solid rgba(147,197,253,.35);border-radius:24px;
-  padding:16px 18px;box-shadow:0 22px 70px rgba(0,0,0,.38)
-}
-.real-top-head{margin-bottom:2px}
-.real-top h2{margin:0;font-size:19px;font-weight:800;color:#dbeafe}
-.real-hero{text-align:center;padding:14px 10px 2px;margin-bottom:4px}
-.real-hero-value{font-size:46px;font-weight:950;line-height:1;letter-spacing:-.02em}
-.real-hero-value.good{color:#86efac}.real-hero-value.warn{color:#fbbf24}.real-hero-value.bad{color:#fca5a5}
-.real-hero-caption{margin-top:10px;font-size:14px;font-weight:750;line-height:1.4}
-.real-hero-caption.ok{color:#bfdbfe}
-.real-hero-caption.bad{color:#fecaca;background:rgba(127,29,29,.4);border:1px solid rgba(248,113,113,.5);border-radius:14px;padding:9px 14px;display:inline-block}
-.real-sub-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:14px 0 6px}
-.real-metric{background:rgba(2,6,23,.43);border:1px solid rgba(148,163,184,.18);border-radius:16px;padding:12px}
-.real-label{color:#cbd5e1;font-size:12px;line-height:1.25}
-.real-value{margin-top:5px;font-size:21px;font-weight:900;white-space:nowrap}
-.real-value.good{color:#86efac}.real-value.warn{color:#fbbf24}.real-value.bad{color:#fecaca}.real-value.teal{color:#5eead4}
-.real-updated-line{display:flex;align-items:center;justify-content:center;gap:6px;font-size:12px;color:#94a3b8;margin:6px 0 10px}
-.real-refresh-btn{width:22px;height:22px;border-radius:999px;background:rgba(148,163,184,.16);border:0;color:#cbd5e1;cursor:pointer;font-size:12px;display:inline-flex;align-items:center;justify-content:center;padding:0;line-height:1}
-.real-refresh-btn.spinning{animation:bp-spin .6s linear}
-@keyframes bp-spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
-.real-balance-toggle{text-align:center;margin-bottom:6px}
-.real-balance-toggle summary{cursor:pointer;color:#93c5fd;font-size:12px;font-weight:700;list-style:none;display:inline-block}
-.real-balance-toggle summary::-webkit-details-marker{display:none}
-.real-formula{margin-bottom:6px}
-.real-formula summary{cursor:pointer;color:#cbd5e1;font-size:12px;font-weight:700;list-style:none;margin-bottom:8px}
-.real-formula summary::-webkit-details-marker{display:none}
-.real-formula summary::before{content:"▸ ";display:inline-block}
-.real-formula[open] summary::before{content:"▾ "}
-.real-calc{display:grid;grid-template-columns:1fr auto;gap:8px 12px;background:rgba(2,6,23,.35);border:1px solid rgba(148,163,184,.16);border-radius:16px;padding:12px}
-.real-calc .amount{text-align:right;font-weight:950}
-.real-calc .total{border-top:1px solid rgba(148,163,184,.20);padding-top:8px;font-weight:950;font-size:16px}
-.real-update{display:grid;grid-template-columns:1fr 170px 120px;gap:8px;align-items:end;margin:8px 0 0}
-.real-update label{display:block;color:#cbd5e1;font-size:12px;margin-bottom:5px}
-.real-update input{width:100%;padding:10px 11px;border-radius:12px}
-.real-update button{width:100%;padding:10px 11px;border-radius:12px}
-@media(max-width:1000px){.real-sub-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
-@media(max-width:650px){.real-top{border-radius:18px;padding:16px}.real-hero-value{font-size:36px}.real-sub-grid{grid-template-columns:1fr}.real-update{grid-template-columns:1fr}}
-
-/* Quick action pills below the hero card -- 2-column on mobile per spec */
-.quick-actions-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:16px}
-.qa-btn{display:flex;align-items:center;justify-content:center;gap:6px;padding:13px 8px;border-radius:14px;font-size:13px;font-weight:800;text-decoration:none;text-align:center}
-.qa-blue{background:#2563eb;color:white}
-.qa-purple{background:#7c3aed;color:white}
-.qa-orange{background:rgba(245,158,11,.14);color:#fbbf24;border:1px solid rgba(245,158,11,.4)}
-.qa-teal{background:rgba(45,212,191,.14);color:#5eead4;border:1px solid rgba(45,212,191,.4)}
-.qa-gray{background:rgba(148,163,184,.14);color:#e2e8f0;border:1px solid rgba(148,163,184,.25)}
-@media(min-width:700px){.quick-actions-grid{grid-template-columns:repeat(3,1fr)}}
-
-/* BP_OCR_CANDIDATES_V1: OCR amount candidates in the receipt review card */
-.candidate-list{display:flex;flex-direction:column;gap:6px;margin:8px 0}
-.candidate{display:flex;align-items:center;gap:8px;font-size:13px;padding:7px 10px;border:1px solid #334155;border-radius:10px;cursor:pointer}
-.candidate input{width:auto;margin:0}
-.candidate-text{flex:1}
-.candidate.not-recommended{color:#94a3b8;border-style:dashed}
-.candidate-tag{font-size:11px;font-weight:800;padding:3px 8px;border-radius:999px;background:#7c3aed;color:white;white-space:nowrap}
-.candidate-tag.not-recommended{background:transparent;border:1px solid #475569;color:#94a3b8}
-.receipt-thumb{display:block;width:100%;max-height:260px;object-fit:contain;background:#020617;border:1px solid rgba(124,58,237,.35);border-radius:14px;margin:10px 0}
-
-/* History timeline */
-.timeline{display:flex;flex-direction:column;gap:18px}
-.timeline-day-label{font-size:12px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid rgba(148,163,184,.14)}
-.timeline-list{display:flex;flex-direction:column;gap:6px}
-.timeline-row{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;padding:8px 10px;border-radius:10px;background:rgba(2,6,23,.35);font-size:13px}
-.timeline-time{color:var(--muted);font-variant-numeric:tabular-nums;flex-shrink:0}
-.timeline-action{font-weight:750;flex-shrink:0}
-.timeline-detail{color:var(--muted);overflow-wrap:anywhere}
-
-</style>
-</head>
-<body>
-{% macro paid_button(payment_id, cycle_key) %}
-<form method="post" action="/payment/state/by-id" class="paid-quick-form">
-<input type="hidden" name="payment_id" value="{{payment_id}}">
-<input type="hidden" name="cycle_key" value="{{cycle_key}}">
-<input type="hidden" name="state" value="paid_me">
-<button class="secondary">✓ Zaplatené</button>
-</form>
-{% endmacro %}
-{% macro state_form(payment_id, cycle_key, states, labels) %}
-<form method="post" action="/payment/state/by-id">
-<input type="hidden" name="payment_id" value="{{payment_id}}">
-<input type="hidden" name="cycle_key" value="{{cycle_key}}">
-<select name="state">{% for s in states %}<option value="{{s}}">{{labels.get(s,s)}}</option>{% endfor %}</select>
-<button class="secondary">Nastaviť</button>
-</form>
-{% endmacro %}
-{% macro defer_widget(payment_id, cycle_key, btn_label) %}
-<div class="defer-widget">
-<button type="button" class="secondary defer-toggle">{{btn_label}}</button>
-<form method="post" action="/payment/defer/by-id" class="defer-form" hidden>
-<input type="hidden" name="payment_id" value="{{payment_id}}">
-<input type="hidden" name="cycle_key" value="{{cycle_key}}">
-<label>Odložiť do dátumu</label>
-<input type="date" name="deferred_to" class="defer-date-input" required>
-<div class="defer-quick-row">
-<button type="button" class="tiny defer-quick" data-quick="7d">+7 dní</button>
-<button type="button" class="tiny defer-quick" data-quick="next_month">ďalší mesiac</button>
-<button type="button" class="tiny defer-quick" data-quick="end_month">koniec mesiaca</button>
-<button type="button" class="tiny defer-quick" data-quick="today">Vrátiť medzi aktuálne</button>
-</div>
-<div class="btn-row">
-<button type="submit" class="secondary">Potvrdiť odklad</button>
-<button type="button" class="secondary defer-cancel">Zrušiť</button>
-</div>
-</form>
-</div>
-{% endmacro %}
-{% macro unpaid_rows(items, accent) %}
-<div class="task-card-list">
-{% for p in items %}
-<div class="task-card {{accent}}" data-payment-id="{{p.get('id','')}}" data-cycle-key="{{p.get('origin_cycle_key', cycle_key)}}">
-<div class="task-card-head">
-<span class="task-card-name">{{p.name}}{% if p.get('carryover_label') %}<br><span class="small">{{p.carryover_label}}</span>{% endif %}</span>
-<span class="task-card-amount {{accent}}">{{p.amount}} €</span>
-</div>
-<div class="task-card-meta">
-<span>Splatné {{p.due_date}}</span>
-{% if p.urgency == 'overdue' %}<span class="badge bad">po splatnosti</span>
-{% elif p.urgency in ('due_today','soon') %}<span class="badge warn">čoskoro</span>
-{% endif %}
-</div>
-<div class="task-card-actions">
-{{ paid_button(p.get('id',''), p.get('origin_cycle_key', cycle_key)) }}
-{{ defer_widget(p.get('id',''), p.get('origin_cycle_key', cycle_key), '↷ Odložiť') }}
-</div>
-<details class="task-card-more"><summary>Iný stav (priorita: {{p.get('priority','-')}})</summary>
-{{ state_form(p.get('id',''), p.get('origin_cycle_key', cycle_key), selectable_states, state_label) }}
-</details>
-</div>
-{% endfor %}
-</div>
-{% endmacro %}
-{% macro deferred_rows(items) %}
-<div class="task-card-list">
-{% for p in items %}
-<div class="task-card deferred" data-payment-id="{{p.get('id','')}}" data-cycle-key="{{p.get('origin_cycle_key', cycle_key)}}">
-<div class="task-card-head">
-<span class="task-card-name">{{p.name}}</span>
-<span class="task-card-amount deferred">{{p.amount}} €</span>
-</div>
-<div class="task-card-meta">
-<span>Odložené do {{p.get('deferred_to','-')}} · pôvodne {{p.get('origin_cycle_key','-')}}</span>
-{% if p.get('days_left') is not none %}
-{% if p.days_left < 0 %}<span class="badge bad">po termíne</span>
-{% elif p.days_left <= 7 %}<span class="badge warn">o {{p.days_left}} {% if p.days_left == 1 %}deň{% elif p.days_left < 5 %}dni{% else %}dní{% endif %}</span>
-{% else %}<span class="badge">o {{p.days_left}} dní</span>
-{% endif %}
-{% endif %}
-</div>
-{% if p.get('note') %}<div class="small">Poznámka: {{p.note}}</div>{% endif %}
-<div class="task-card-actions">
-{{ paid_button(p.get('id',''), p.get('origin_cycle_key', cycle_key)) }}
-{{ defer_widget(p.get('id',''), p.get('origin_cycle_key', cycle_key), 'Zmeniť dátum') }}
-</div>
-</div>
-{% endfor %}
-</div>
-{% endmacro %}
-<script>
-window.BP_ACTIVE_VIEW = "{{active_view}}";
-window.BP_EDIT_TARGET = "{% if edit_payment is not none %}edit-form-payment{% elif edit_income is not none %}edit-form-income{% elif edit_expense is not none %}edit-form-expense{% endif %}";
-</script>
-<nav class="topnav" id="appDrawer">
-<span class="brand">BudgetPilot</span>
-<a href="/" class="{% if active_view=='dashboard' %}active{% endif %}">Prehľad</a>
-<a href="/payments" class="{% if active_view=='payments' %}active{% endif %}">Platby</a>
-<a href="/deferred" class="{% if active_view=='deferred' %}active{% endif %}">Odložené</a>
-<a href="/envelopes" class="{% if active_view=='envelopes' %}active{% endif %}">Obálky</a>
-<a href="/expenses" class="{% if active_view=='expenses' %}active{% endif %}">Výdavky</a>
-<a href="/receipts" class="{% if active_view=='receipts' %}active{% endif %}">OCR</a>
-<a href="/history" class="{% if active_view=='history' %}active{% endif %}">História</a>
-<a href="/settings" class="{% if active_view=='settings' %}active{% endif %}">Nastavenia</a>
-</nav>
-<nav class="bottomnav">
-<a href="/" class="{% if active_view=='dashboard' %}active{% endif %}"><span class="bn-icon">🏠</span>Prehľad</a>
-<a href="/payments" class="{% if active_view=='payments' %}active{% endif %}"><span class="bn-icon">🧾</span>Platby</a>
-<a href="/deferred" class="{% if active_view=='deferred' %}active{% endif %}"><span class="bn-icon">↷</span>Odložené</a>
-<a href="/envelopes" class="{% if active_view=='envelopes' %}active{% endif %}"><span class="bn-icon">✉</span>Obálky</a>
-<a href="/receipts" class="{% if active_view=='receipts' %}active{% endif %}"><span class="bn-icon">📷</span>OCR</a>
-</nav>
-<div class="app">
-
-<aside class="sidebar">
-<div class="card">
-<h1>BudgetPilot</h1>
-<div class="small">Pokojný prehľad toho, čo treba zaplatiť a čo ostáva na bežné míňanie.</div>
-</div>
-
-{% if setup_needed and active_view == 'dashboard' %}
-<div class="card" style="border-color:var(--orange)">
-<h2>Doplň základné nastavenie</h2>
-<div class="small">Stačí aktuálny stav účtu a pravidelné platby, aby prehľad začal dávať zmysel.</div>
-<div class="btn-row"><a href="/setup"><button type="button">Otvoriť nastavenie</button></a></div>
-</div>
-{% endif %}
-
-{% if active_view == 'settings' %}
-<div class="card">
-<h2>Účet + rezerva</h2>
-<form method="post" action="/settings">
-<label>Suma na účte teraz</label>
-<input name="account_balance" value="{{settings.get('account_balance',0)}}">
-<label><input type="checkbox" name="use_reserve" {% if settings.get('use_reserve') %}checked{% endif %} style="width:auto"> Mám reálnu rezervu bokom</label>
-<label>Rezerva bokom</label>
-<input name="safe_min" value="{{settings.get('safe_min',0)}}">
-<div class="small">Rezerva zostane bokom a nebude sa miešať do peňazí na bežné míňanie.</div>
-<div class="btn-row"><button>Uložiť</button></div>
-</form>
-</div>
-
-<div class="card" id="edit-form-income">
-<h2>{% if edit_income is not none %}Upraviť príjem{% else %}Príjem{% endif %}</h2>
-<form method="post" action="{% if edit_income is not none %}/income/update/{{edit_income}}{% else %}/income/add{% endif %}">
-<label>Názov</label><input name="name" value="{{income_form.get('name','Výplata netto')}}">
-<label>Suma</label><input name="amount" value="{{income_form.get('amount','2000')}}">
-<label>Deň v mesiaci</label><input name="day" value="{{income_form.get('day','15')}}">
-<div class="btn-row">
-<button>{% if edit_income is not none %}Uložiť úpravu{% else %}Pridať príjem{% endif %}</button>
-{% if edit_income is not none %}<a href="/settings"><button type="button" class="secondary">Zrušiť</button></a>{% endif %}
-</div>
-</form>
-</div>
-{% endif %}
-
-{% if active_view == 'payments' %}
-<div class="card" id="edit-form-payment">
-<h2>{% if edit_payment is not none %}Upraviť platbu{% else %}Pravidelná platba{% endif %}</h2>
-<form method="post" action="{% if edit_payment is not none %}/payment/update/{{edit_payment}}{% else %}/payment/add{% endif %}">
-<label>Typ</label>
-<select name="type">{% for t in payment_types %}<option {% if payment_form.type==t %}selected{% endif %}>{{t}}</option>{% endfor %}</select>
-<label>Názov pri „Iné“</label><input name="name" value="{{payment_form.name}}" placeholder="napr. škôlka, leasing, daň">
-<label>Suma</label><input name="amount" value="{{payment_form.amount}}" placeholder="napr. 820">
-<div class="inline">
-<div><label>Deň</label><input name="day" value="{{payment_form.day}}"></div>
-<div><label>Mesiac štartu</label><input name="month" value="{{payment_form.month}}"></div>
-</div>
-<label>Rok štartu</label><input name="year" value="{{payment_form.year}}">
-<label>Opakovanie</label>
-<select name="frequency">
-{% for f in ["monthly","quarterly","yearly","custom_months","once"] %}
-<option value="{{f}}" {% if payment_form.frequency==f %}selected{% endif %}>{{freq_label.get(f,f)}}</option>
-{% endfor %}
-</select>
-<label>Ak vlastné: každých X mesiacov</label><input name="every_months" value="{{payment_form.every_months}}" placeholder="napr. 24">
-<div class="btn-row">
-<button>{% if edit_payment is not none %}Uložiť úpravu{% else %}Pridať platbu{% endif %}</button>
-{% if edit_payment is not none %}<a href="/payments"><button type="button" class="secondary">Zrušiť</button></a>{% endif %}
-</div>
-</form>
-</div>
-
-<div class="card">
-<h2>Jednorazová platba</h2>
-<form method="post" action="/onetime/add">
-<label>Názov</label><input name="name" placeholder="napr. servis auta">
-<label>Suma</label><input name="amount" placeholder="napr. 180">
-<label>Termín splatnosti</label><input name="due_date" value="{{today}}">
-<label>Priorita</label>
-<select name="priority">{% for p, label in priority_label.items() %}<option value="{{p}}">{{label}}</option>{% endfor %}</select>
-<div class="btn-row"><button>Pridať jednorazovú platbu</button></div>
-</form>
-</div>
-
-<div class="card">
-<h2>Dlhy a pôžičky</h2>
-<form method="post" action="/debt/add">
-<label>Názov / komu-od koho</label><input name="name" placeholder="napr. Peter, pôžička na auto">
-<label>Suma</label><input name="amount" placeholder="napr. 300">
-<label>Smer</label>
-<select name="direction">
-{% for d, label in debt_direction_label.items() %}<option value="{{d}}">{{label}}</option>{% endfor %}
-</select>
-<label>Termín splatnosti</label><input name="due_date" value="{{today}}">
-<label>Poznámka</label><input name="note" placeholder="voliteľné">
-<div class="btn-row"><button>Pridať dlh</button></div>
-</form>
-</div>
-{% endif %}
-
-{% if active_view == 'expenses' %}
-<div class="card" id="expense-quick">
-<h2>Rýchly výdavok</h2>
-<form method="post" action="/expense/add">
-<input type="hidden" name="name" value="Rýchly výdavok">
-<label>Suma</label><input name="amount" placeholder="napr. 50">
-<input type="hidden" name="date" value="{{today}}">
-<div class="btn-row"><button>Pridať</button></div>
-</form>
-</div>
-
-<div class="card" id="edit-form-expense">
-<h2>{% if edit_expense is not none %}Upraviť výdavok{% else %}Detailný výdavok{% endif %}</h2>
-<form method="post" action="{% if edit_expense is not none %}/expense/update/{{edit_expense}}{% else %}/expense/add{% endif %}">
-<label>Typ (obálka)</label>
-<select name="name">{% for t in expense_types %}<option {% if expense_form.name==t %}selected{% endif %}>{{t}}</option>{% endfor %}</select>
-<label>Suma</label><input name="amount" value="{{expense_form.amount}}">
-<label>Poznámka / obchod (voliteľné)</label><input name="merchant" value="{{expense_form.get('merchant','')}}" placeholder="napr. Lidl">
-<label>Dátum</label><input name="date" value="{{expense_form.date}}">
-<div class="btn-row">
-<button>{% if edit_expense is not none %}Uložiť úpravu{% else %}Pridať výdavok{% endif %}</button>
-{% if edit_expense is not none %}<a href="/expenses"><button type="button" class="secondary">Zrušiť</button></a>{% endif %}
-</div>
-</form>
-</div>
-{% endif %}
-
-{% if active_view == 'receipts' %}
-<div class="card">
-<h2>Pridať výdavok z účtenky</h2>
-<form method="post" action="/receipt/upload" enctype="multipart/form-data">
-<label>Fotka účtenky</label>
-<input type="file" name="image" accept="image/*" capture="environment" required>
-<div class="small">Rozpoznaná suma je len návrh. Pred uložením ju vždy uvidíš a môžeš opraviť.</div>
-<div class="btn-row"><button>Nahrať a rozpoznať</button></div>
-</form>
-</div>
-
-{% if receipt_review %}
-<div class="card" id="receipt-review" style="border-color:#7c3aed">
-<h2>📷 Potvrdiť účtenku</h2>
-<div class="small">Odhad z OCR — over si sumu a dátum, priradí sa kategória, a až potom sa uloží ako výdavok.</div>
-<img class="receipt-thumb" src="/receipt/image/{{receipt_review.receipt_id}}" alt="Fotka účtenky">
-<form method="post" action="/receipt/confirm">
-<input type="hidden" name="receipt_id" value="{{receipt_review.receipt_id}}">
-<input type="hidden" name="image_path" value="{{receipt_review.image_path}}">
-{% if receipt_review.candidates %}
-<label>Nájdené sumy na účtenke</label>
-<div class="candidate-list">
-{% for c in receipt_review.candidates %}
-<label class="candidate {% if c.not_recommended %}not-recommended{% endif %}">
-<input type="radio" name="_candidate_pick" onclick="document.getElementById('receipt-amount').value='{{'%.2f'|format(c.amount)}}'">
-<span class="candidate-text">{% if not c.not_recommended and c.amount == receipt_review.amount %}Odporúčané: {% endif %}{{c.label}}: {{"%.2f"|format(c.amount)}} €</span>
-<span class="candidate-tag {% if c.not_recommended %}not-recommended{% endif %}">{% if c.not_recommended %}Neodporúčané{% else %}Použiť{% endif %}</span>
-</label>
-{% endfor %}
-</div>
-{% endif %}
-<label>Vybraná suma</label><input id="receipt-amount" name="amount" value="{{receipt_review.amount or ''}}" placeholder="skontroluj sumu">
-<label>Obálka</label>
-<select name="name">{% for t in expense_types %}<option {% if t=='Iné' %}selected{% endif %}>{{t}}</option>{% endfor %}</select>
-<label>Poznámka (voliteľné, aj obchod)</label><input name="merchant" value="{{receipt_review.merchant or ''}}" placeholder="napr. Lidl">
-<label>Dátum</label><input name="date" value="{{receipt_review.date or today}}">
-<div class="btn-row">
-<button>Uložiť výdavok</button>
-<a href="/receipts"><button type="button" class="secondary">Zrušiť</button></a>
-</div>
-</form>
-</div>
-{% endif %}
-{% endif %}
-
-{% if active_view == 'envelopes' %}
-<div class="card">
-<h2>Obálka (mesačný limit)</h2>
-<form method="post" action="/envelope/add">
-<label>Kategória</label>
-<select name="category">{% for t in expense_types %}<option>{{t}}</option>{% endfor %}</select>
-<label>Mesačný limit</label><input name="monthly_limit" placeholder="napr. 200">
-<div class="small">Ak už na túto kategóriu obálka existuje, uloženie iba prepíše jej limit.</div>
-<div class="btn-row"><button>Uložiť obálku</button></div>
-</form>
-</div>
-{% endif %}
-</aside>
-
-<main class="main" id="overview">
-<div class="summarygrid">
-<div class="card metric"><div class="label">Zostatok na účte</div><div class="value">{{summary.balance}}</div></div>
-<div class="card metric"><div class="label">Nezaplatené pred výplatou</div><div class="value">{{summary.unpaid_total}}</div></div>
-<div class="card metric"><div class="label">Bezpečne minúť teraz (pred výplatou)</div><div class="value {{dash.status_class}}">{{summary.safe_to_spend}}</div></div>
-<div class="card metric"><div class="label">Na deň do výplaty</div><div class="value">{{summary.daily_safe_to_spend}}</div></div>
-{% if summary.shortfall != '-' %}
-<div class="card metric"><div class="label">Chýba do výplaty</div><div class="value bad">{{summary.shortfall}}</div></div>
-{% endif %}
-<div class="card metric"><div class="label">Odhad po najbližšej výplate (vrátane budúceho príjmu)</div><div class="value">{{summary.projected_after_payday}}</div></div>
-<div class="card metric"><div class="label">Ďalšia výplata</div><div class="value">{{summary.next_payday}}</div></div>
-</div>
-
-<div class="card section" id="forecast3m">
-<h2>3-mesačný výhľad</h2>
-<div class="small">Orientácia na najbližšie mesiace. Je to plán za celý mesiac, nie suma dostupná na míňanie dnes.</div>
-<div class="table-scroll">
-<table><tr><th>Mesiac</th><th>Plánovaný príjem</th><th>Plánované platby</th><th>Plán mesiaca</th><th>Stav</th></tr>
-{% for m in forecast_months %}
-<tr>
-<td>{{m.label}}</td>
-<td>{{"%.2f"|format(m.income_total)}} €</td>
-<td>{{"%.2f"|format(m.payment_total)}} €</td>
-<td class="{% if m.planned_month_balance < 0 %}bad{% else %}ok{% endif %}">{{"%.2f"|format(m.planned_month_balance)}} €</td>
-<td>{{m.status}}</td>
-</tr>
-{% endfor %}
-</table>
-</div>
-</div>
-
-{% if active_view == 'dashboard' %}
-<div class="card summary-card payments-summary">
-<div class="summary-card-head"><h2>🧾 Platby</h2><a class="summary-card-link" href="/payments">Zobraziť všetky →</a></div>
-<div class="summary-stats">
-<div class="stat"><div class="stat-value">{{unpaid|length}}</div><div class="stat-label">nezaplatené</div></div>
-<div class="stat"><div class="stat-value {% if unpaid_overdue|length %}bad{% endif %}">{{unpaid_overdue|length}}</div><div class="stat-label">po splatnosti</div></div>
-<div class="stat"><div class="stat-value {% if unpaid_soon|length %}warn{% endif %}">{{unpaid_soon|length}}</div><div class="stat-label">čoskoro</div></div>
-</div>
-<div class="small">Spolu nezaplatené {{summary.unpaid_total}}</div>
-<a href="/payments"><button type="button">Otvoriť platby</button></a>
-</div>
-
-<div class="card summary-card deferred-summary">
-<div class="summary-card-head"><h2>↷ Odložené platby</h2><a class="summary-card-link" href="/deferred">Zobraziť všetky →</a></div>
-{% if deferred %}
-<div class="summary-stats">
-<div class="stat"><div class="stat-value warn">{{"%.2f"|format(deferred|sum(attribute='amount'))}} €</div><div class="stat-label">odložené</div></div>
-<div class="stat"><div class="stat-value">{{deferred|length}}</div><div class="stat-label">počet</div></div>
-</div>
-{% set next_deferred = deferred|sort(attribute='deferred_to')|first %}
-{% if next_deferred %}<div class="small">Najbližšie: {{next_deferred.name}} — {{next_deferred.deferred_to}}</div>{% endif %}
-<div class="deferred-mini-list">
-{% for p in (deferred|sort(attribute='deferred_to'))[:3] %}
-<div class="deferred-mini-row"><span>{{p.name}}</span><span>{{p.amount}} € · {{p.deferred_to}}</span></div>
-{% endfor %}
-</div>
-{% else %}<div class="small">Žiadne odložené platby.</div>{% endif %}
-<a href="/deferred"><button type="button">Otvoriť odložené</button></a>
-</div>
-
-<div class="card summary-card envelopes-summary-dashboard">
-<div class="summary-card-head"><h2>✉ Obálky</h2><a class="summary-card-link" href="/envelopes">Zobraziť všetky →</a></div>
-<div class="summary-stats">
-<div class="stat"><div class="stat-value">{{"%.2f"|format(envelope_totals.total_limit)}} €</div><div class="stat-label">plán</div></div>
-<div class="stat"><div class="stat-value">{{"%.2f"|format(envelope_totals.total_spent)}} €</div><div class="stat-label">minuté</div></div>
-<div class="stat"><div class="stat-value teal">{{"%.2f"|format(envelope_totals.total_remaining)}} €</div><div class="stat-label">ostáva</div></div>
-</div>
-{% for r in envelope_rows[:3] %}
-<div class="deferred-mini-row"><span>{{r.category}}</span><span>{{"%.2f"|format(r.remaining)}} € ostáva</span></div>
-{% endfor %}
-<a href="/envelopes"><button type="button">Spravovať obálky</button></a>
-</div>
-
-<div class="card summary-card activity-summary">
-<div class="summary-card-head"><h2>🕘 Nedávna aktivita</h2><a class="summary-card-link" href="/history">Zobraziť všetky →</a></div>
-{% if audit_entries %}
-{% for a in audit_entries[:5] %}
-<div class="deferred-mini-row"><span>{{audit_action_label.get(a.action, a.action)}}</span><span class="small">{{a.at}}</span></div>
-{% endfor %}
-{% else %}<div class="small">Zatiaľ žiadna aktivita.</div>{% endif %}
-<a href="/history"><button type="button">Celá história</button></a>
-</div>
-{% endif %}
-
-{% if active_view == 'payments' %}
-<div class="view-tabs">
-<a href="#po-splatnosti" class="view-tab tab-red">Po splatnosti <span class="tab-badge">{{unpaid_overdue|length}}</span></a>
-<a href="#coskoro" class="view-tab tab-orange">Čoskoro <span class="tab-badge">{{unpaid_soon|length}}</span></a>
-<a href="#caka" class="view-tab tab-blue">Čaká <span class="tab-badge">{{unpaid_pending|length}}</span></a>
-<a href="#zaplatene" class="view-tab tab-green">Zaplatené <span class="tab-badge">{{paid|length}}</span></a>
-</div>
-
-<div class="card section" id="po-splatnosti">
-<h2>Po splatnosti ({{unpaid_overdue|length}})</h2>
-{% if unpaid_overdue %}{{ unpaid_rows(unpaid_overdue, 'overdue') }}{% else %}<div class="small">Nič po splatnosti. ✅</div>{% endif %}
-</div>
-
-<div class="card section" id="coskoro">
-<h2>Čoskoro (do 3 dní) ({{unpaid_soon|length}})</h2>
-{% if unpaid_soon %}{{ unpaid_rows(unpaid_soon, 'soon') }}{% else %}<div class="small">Nič v najbližších dňoch.</div>{% endif %}
-</div>
-
-<div class="card section" id="caka">
-<h2>Čaká na potvrdenie ({{unpaid_pending|length}})</h2>
-{% if unpaid_pending %}{{ unpaid_rows(unpaid_pending, 'pending') }}{% else %}<div class="small">Nič nečaká na zaplatenie. ✅</div>{% endif %}
-</div>
-
-<details class="card section" id="zaplatene" open>
-<summary>Zaplatené ({{paid|length}})</summary>
-{% if paid %}
-<div class="task-card-list">
-{% for p in paid %}
-<div class="task-card paid">
-<div class="task-card-head">
-<span class="task-card-name">{{p.name}}</span>
-<span class="task-card-amount paid">{{p.amount}} €</span>
-</div>
-<div class="task-card-meta"><span class="badge {{state_badge_class.get(p.state,'')}}">{{state_label.get(p.state, p.state)}}</span></div>
-</div>
-{% endfor %}
-</div>
-{% else %}<div class="small">Zatiaľ nič zaplatené v tomto cykle.</div>{% endif %}
-</details>
-
-<div class="card">
-<h2>Overiť nákup</h2>
-<form method="get" action="/payments">
-<div class="inline"><input name="test" placeholder="napr. 50" value="{{test_amount}}"><button>Skontrolovať</button></div>
-</form>
-{% if test_result %}<pre>{{test_result}}</pre>{% endif %}
-</div>
-
-<div class="card">
-<h2>Pravidelné platby</h2>
-<div class="small">Stav platí len pre aktuálny cyklus ({{cycle_key}}). Úprava platby zmení budúce výskyty, nie to, či je tento mesiac zaplatená.</div>
-<div class="table-scroll">
-<table><tr><th>Názov</th><th>Suma</th><th>Deň</th><th>Frekvencia</th><th>Stav</th><th></th></tr>
-{% for x in payments %}
-{% set rx = payments_resolved[loop.index0] %}
-<tr>
-<td>{{x.get('name')}}</td><td>{{x.get('amount')}} €</td><td>{{x.get('day')}}</td>
-<td>{{freq_label.get(x.get('frequency'), x.get('frequency'))}}{% if x.get('frequency')=='custom_months' %} / {{x.get('every_months')}} mes.{% endif %}</td>
-<td><span class="badge {{state_badge_class.get(rx.state,'')}}">{{state_label.get(rx.state, rx.state)}}</span>{% if rx.state=='deferred' and rx.get('deferred_to') %}<br><span class="small">do {{rx.deferred_to}}</span>{% endif %}</td>
-<td class="actions-stack">
-<form method="post" action="/payment/state/{{loop.index0}}">
-<select name="state">
-{% for s in selectable_states %}<option value="{{s}}" {% if rx.state==s %}selected{% endif %}>{{state_label.get(s,s)}}</option>{% endfor %}
-</select>
-<button class="secondary">Nastaviť</button>
-</form>
-{{ defer_widget(x.get('id',''), cycle_key, '↷ Odložiť') }}
-<form method="get" action="/edit/payment/{{loop.index0}}"><button class="secondary">Upraviť</button></form>
-<form method="post" action="/payment/delete/{{loop.index0}}"><button class="danger">Zmazať</button></form>
-</td></tr>
-{% endfor %}
-</table>
-</div>
-</div>
-
-<div class="card section">
-<h2>Jednorazové platby</h2>
-<div class="small">Jednorazová platba sa zaráta do prehľadu v mesiaci, v ktorom má termín.</div>
-{% if onetime_resolved %}
-<div class="table-scroll">
-<table><tr><th>Názov</th><th>Suma</th><th>Termín</th><th>Priorita</th><th>Stav</th><th></th></tr>
-{% for x in onetime_resolved %}
-<tr>
-<td>{{x.name}}</td><td>{{x.amount}} €</td><td>{{x.due_date}}</td><td>{{priority_label.get(x.get('priority'), x.get('priority','-'))}}</td>
-<td><span class="badge {{state_badge_class.get(x.state,'')}}">{{state_label.get(x.state, x.state)}}</span>{% if x.state=='deferred' and x.get('deferred_to') %}<br><span class="small">do {{x.deferred_to}}</span>{% endif %}</td>
-<td class="actions-stack">
-<form method="post" action="/onetime/state/{{x._index}}">
-<select name="state">
-{% for s in selectable_states %}<option value="{{s}}" {% if x.state==s %}selected{% endif %}>{{state_label.get(s,s)}}</option>{% endfor %}
-</select>
-<button class="secondary">Nastaviť</button>
-</form>
-<form method="post" action="/onetime/defer/{{x._index}}"><button class="secondary">Odložiť o 7 dní</button></form>
-<form method="post" action="/onetime/delete/{{x._index}}"><button class="danger">Zmazať</button></form>
-</td></tr>
-{% endfor %}
-</table>
-</div>
-{% else %}<div class="small">Zatiaľ žiadna jednorazová platba tento mesiac.</div>{% endif %}
-</div>
-
-<div class="card section">
-<h2>Dlhy a pôžičky</h2>
-<div class="small">Čo dlžíš ty, znižuje dostupné peniaze. Čo má prísť tebe, je len poznámka, kým to reálne nepríde na účet.</div>
-{% if debts %}
-<div class="table-scroll">
-<table><tr><th>Smer</th><th>Názov</th><th>Suma</th><th>Termín</th><th>Stav</th><th></th></tr>
-{% for d in debts %}
-<tr>
-<td>{{debt_direction_label.get(d.direction, d.direction)}}</td>
-<td>{{d.name}}{% if d.get('note') %}<br><span class="small">{{d.note}}</span>{% endif %}</td>
-<td>{{"%.2f"|format(d.amount)}} €</td>
-<td>{{d.get('due_date','-')}}</td>
-<td><span class="badge {% if d.state in ('paid_me','received') %}ok{% elif d.state=='deferred' %}warn{% endif %}">{{debt_state_label.get(d.state, d.state)}}</span></td>
-<td class="actions-stack">
-<form method="post" action="/debt/state/{{loop.index0}}">
-<select name="state">
-{% for s in debt_states_by_direction.get(d.direction, []) %}<option value="{{s}}" {% if d.state==s %}selected{% endif %}>{{debt_state_label.get(s,s)}}</option>{% endfor %}
-</select>
-<button class="secondary">Nastaviť</button>
-</form>
-<form method="post" action="/debt/delete/{{loop.index0}}"><button class="danger">Zmazať</button></form>
-</td></tr>
-{% endfor %}
-</table>
-</div>
-{% else %}<div class="small">Zatiaľ žiadny dlh.</div>{% endif %}
-</div>
-{% endif %}
-
-{% if active_view == 'deferred' %}
-<div class="card summary-card">
-<div class="summary-card-head"><h2>Odložené platby ({{deferred|length}})</h2></div>
-<div class="summary-stats">
-<div class="stat"><span class="stat-value warn">{{deferred|length}}</span><span class="stat-label">odložených</span></div>
-<div class="stat"><span class="stat-value">{{"%.2f"|format(deferred|sum(attribute='amount'))}} €</span><span class="stat-label">spolu</span></div>
-{% if deferred_overdue %}<div class="stat"><span class="stat-value bad">{{deferred_overdue|length}}</span><span class="stat-label">po termíne</span></div>{% endif %}
-</div>
-<div class="small">Odložené platby ostávajú pod kontrolou. Keď príde ich dátum, vrátia sa medzi nezaplatené.</div>
-</div>
-
-{% if deferred %}
-<div class="view-tabs">
-<a href="#d-po-terminie" class="view-tab tab-red">Po termíne <span class="tab-badge">{{deferred_overdue|length}}</span></a>
-<a href="#d-coskoro" class="view-tab tab-orange">Čoskoro <span class="tab-badge">{{deferred_soon|length}}</span></a>
-<a href="#d-neskor" class="view-tab tab-blue">Neskôr <span class="tab-badge">{{deferred_later|length}}</span></a>
-</div>
-
-<div class="card section" id="d-po-terminie">
-<h2>Po termíne</h2>
-{% if deferred_overdue %}{{ deferred_rows(deferred_overdue|sort(attribute='deferred_to')) }}{% else %}<div class="small">Nič po termíne. ✅</div>{% endif %}
-</div>
-
-<div class="card section" id="d-coskoro">
-<h2>Čoskoro (do 7 dní)</h2>
-{% if deferred_soon %}{{ deferred_rows(deferred_soon|sort(attribute='deferred_to')) }}{% else %}<div class="small">Nič v najbližších 7 dňoch.</div>{% endif %}
-</div>
-
-<div class="card section" id="d-neskor">
-<h2>Neskôr</h2>
-{% if deferred_later %}{{ deferred_rows(deferred_later|sort(attribute='deferred_to')) }}{% else %}<div class="small">Nič ďalšie odložené.</div>{% endif %}
-</div>
-{% else %}
-<div class="card section"><div class="small">Žiadne odložené platby. ✅</div></div>
-{% endif %}
-{% endif %}
-
-{% if active_view == 'expenses' %}
-<div class="card">
-<h2>Výdavky navyše</h2>
-{% if expenses %}
-<div class="table-scroll">
-<table><tr><th>Názov</th><th>Suma</th><th>Dátum</th><th></th></tr>
-{% for x in expenses %}
-<tr><td>{{x.get('name')}}{% if x.get('source')=='ocr' %} <span class="badge">OCR{% if x.get('merchant') %}: {{x.merchant}}{% endif %}</span>{% endif %}</td><td>{{x.get('amount')}} €</td><td>{{x.get('date')}}</td>
-<td class="actions">
-<form method="get" action="/edit/expense/{{loop.index0}}"><button class="secondary">Upraviť</button></form>
-<form method="post" action="/expense/delete/{{loop.index0}}"><button class="danger">Zmazať</button></form>
-</td></tr>
-{% endfor %}
-</table>
-</div>
-{% else %}<div class="small">Zatiaľ tu nie sú žiadne ručne pridané výdavky.</div>{% endif %}
-</div>
-{% endif %}
-
-{% if active_view == 'envelopes' %}
-<details class="card section">
-<summary>Obálky — správa (pridať novú / zmazať)</summary>
-{% if envelope_rows %}
-<div class="table-scroll">
-<table><tr><th>Kategória</th><th>Limit</th><th>Minuté</th><th>Zostáva</th><th>Priemer/mesiac</th><th></th></tr>
-{% for r in envelope_rows %}
-<tr>
-<td>{{r.category}}</td>
-<td>{{"%.2f"|format(r.monthly_limit)}} €</td>
-<td>{{"%.2f"|format(r.spent)}} €</td>
-<td class="{% if r.over_budget %}bad{% else %}ok{% endif %}">{{"%.2f"|format(r.remaining)}} €</td>
-<td class="small">{{"%.2f"|format(r.avg_3m)}} €</td>
-<td class="actions">
-<form method="post" action="/envelope/delete/{{loop.index0}}"><button class="danger">Zmazať</button></form>
-</td>
-</tr>
-{% endfor %}
-<tr><td><strong>Spolu</strong></td><td><strong>{{"%.2f"|format(envelope_totals.total_limit)}} €</strong></td>
-<td><strong>{{"%.2f"|format(envelope_totals.total_spent)}} €</strong></td>
-<td class="{% if envelope_totals.total_remaining < 0 %}bad{% else %}ok{% endif %}"><strong>{{"%.2f"|format(envelope_totals.total_remaining)}} €</strong></td>
-<td></td><td></td></tr>
-</table>
-</div>
-{% else %}<div class="small">Zatiaľ žiadna obálka. Pridaj limit pre kategóriu vľavo.</div>{% endif %}
-</details>
-{% endif %}
-
-{% if active_view == 'settings' %}
-<div class="card">
-<h2>Príjmy</h2>
-{% if incomes %}
-<div class="table-scroll">
-<table><tr><th>Názov</th><th>Suma</th><th>Deň</th><th></th></tr>
-{% for x in incomes %}
-<tr><td>{{x.get('name')}}</td><td>{{x.get('amount')}} €</td><td>{{x.get('day')}}</td>
-<td class="actions">
-<form method="get" action="/edit/income/{{loop.index0}}"><button class="secondary">Upraviť</button></form>
-<form method="post" action="/income/delete/{{loop.index0}}"><button class="danger">Zmazať</button></form>
-</td></tr>
-{% endfor %}
-</table>
-</div>
-{% else %}<div class="small">Príjem je voliteľný. Prehľad počíta hlavne z aktuálneho stavu účtu a platieb.</div>{% endif %}
-</div>
-
-<details class="card danger-zone">
-<summary>Citlivá zóna — vymazať všetko</summary>
-<p class="small">
-Táto voľba vyčistí platby, výdavky, obálky, dlhy, históriu, účtenky aj nastavenia a potom spustí
-prvotného sprievodcu. Pred vyčistením sa <strong>automaticky uloží záloha</strong> do <code>backups/</code>,
-aby sa dala v prípade potreby obnoviť ručne.
-</p>
-{% if request.args.get('reset_error') %}
-<div class="small" style="color:var(--red);font-weight:700">Kód sa nezhodoval, nič sa nezmazalo. Skús to znova.</div>
-{% endif %}
-<form method="post" action="/settings/reset" id="reset-form">
-<label>Na potvrdenie napíš presne: {{ reset_confirm_code }}</label>
-<input type="text" name="confirm_code" id="reset-confirm-input" autocomplete="off" placeholder="{{ reset_confirm_code }}">
-<div class="btn-row"><button type="submit" class="danger" id="reset-submit-btn" data-code="{{ reset_confirm_code }}" disabled>Vymazať všetko a začať odznova</button></div>
-</form>
-</details>
-{% endif %}
-
-{% if active_view == 'history' %}
-<div class="card">
-<h2>História zmien ({{audit_entries|length}})</h2>
-{% if audit_entries %}
-<div class="timeline">
-{% for day, day_entries in audit_entries|groupby('day')|reverse %}
-<div class="timeline-day">
-<div class="timeline-day-label">{{day}}</div>
-<div class="timeline-list">
-{% for a in day_entries %}
-<div class="timeline-row">
-<span class="timeline-time">{{a.time}}</span>
-<span class="timeline-action">{{audit_action_label.get(a.action, a.action)}}</span>
-<span class="timeline-detail">{{a.detail}}</span>
-</div>
-{% endfor %}
-</div>
-</div>
-{% endfor %}
-</div>
-{% else %}<div class="small">Zatiaľ žiadna aktivita.</div>{% endif %}
-</div>
-
-<details class="card">
-<summary>Technický výstup</summary>
-<pre>{{core}}</pre>
-</details>
-{% endif %}
-</main>
-</div>
-
-<script>
-/* BP_APP_SHELL_PATCH_V1 */
-(function(){
-  function ready(fn){ if(document.readyState !== "loading") fn(); else document.addEventListener("DOMContentLoaded", fn); }
-  ready(function(){
-    const body = document.body;
-    const nav = document.querySelector(".topnav");
-    if(nav && !document.querySelector(".menu-toggle")){
-      nav.id = "appDrawer";
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "menu-toggle";
-      btn.setAttribute("aria-label", "Otvoriť menu");
-      btn.textContent = "☰";
-      const overlay = document.createElement("div");
-      overlay.className = "drawer-overlay";
-      document.body.insertBefore(overlay, document.body.firstChild);
-      document.body.insertBefore(btn, document.body.firstChild);
-      function close(){ nav.classList.remove("open"); overlay.classList.remove("open"); }
-      function toggle(){ nav.classList.toggle("open"); overlay.classList.toggle("open"); }
-      btn.addEventListener("click", toggle);
-      overlay.addEventListener("click", close);
-      nav.querySelectorAll("a").forEach(a => a.addEventListener("click", close));
-    }
-
-    // Add labels to responsive table cards from header cells.
-    document.querySelectorAll("table").forEach(function(table){
-      const labels = Array.from(table.querySelectorAll("tr:first-child th")).map(th => th.textContent.trim());
-      table.querySelectorAll("tr").forEach(function(row, idx){
-        if(idx === 0) return;
-        row.querySelectorAll("td").forEach(function(td, i){
-          if(labels[i] && !td.hasAttribute("data-label")) td.setAttribute("data-label", labels[i]);
-        });
-      });
-    });
-
-    // Replace payment dropdown-only workflow with tap-friendly direct buttons.
-    document.querySelectorAll('.actions-stack form[action*="/payment/state/"]').forEach(function(form){
-      if(form.parentElement.querySelector(".quick-actions")) return;
-      const action = form.getAttribute("action");
-      const quick = document.createElement("div");
-      quick.className = "quick-actions";
-      const items = [
-        ["paid_me", "Z účtu", "pay-main"],
-        ["paid_other", "Iný", "pay-other"],
-        ["paid_reserve", "Rezerva", "pay-reserve"],
-        ["pending", "Nezaplatené", "reset"]
-      ];
-      items.forEach(function(it){
-        const f = document.createElement("form");
-        f.method = "post";
-        f.action = action;
-        f.className = it[2];
-        f.innerHTML = '<input type="hidden" name="state" value="'+it[0]+'"><button type="submit">'+it[1]+'</button>';
-        quick.appendChild(f);
-      });
-      const defer = form.parentElement.querySelector('form[action*="/payment/defer/"]');
-      if(defer){
-        const df = defer.cloneNode(true);
-        df.className = "defer";
-        const b = df.querySelector("button");
-        if(b) b.textContent = "Odložiť";
-        quick.appendChild(df);
-        defer.style.display = "none";
-      }
-      form.parentElement.insertBefore(quick, form.parentElement.firstChild);
-    });
-  });
-})();
-</script>
-
-
-
-
-
-<script>
-/* BP_UX_SAFETY_V2 */
-(function(){
-  function ready(fn){
-    if(document.readyState !== "loading") fn();
-    else document.addEventListener("DOMContentLoaded", fn);
-  }
-
-  function norm(s){ return (s || "").trim().toLowerCase(); }
-
-  function sectionByExactHeading(text){
-    const headings = Array.from(document.querySelectorAll("h2"));
-    const h = headings.find(x => norm(x.textContent) === norm(text));
-    return h ? (h.closest(".card, .section") || h.parentElement) : null;
-  }
-
-  function sectionByHeadingPrefix(prefix){
-    const heads = Array.from(document.querySelectorAll("h2, summary"));
-    const h = heads.find(x => norm(x.textContent).indexOf(norm(prefix)) === 0);
-    return h ? (h.closest(".card, .section") || h.parentElement) : null;
-  }
-
-  function todayIso(){
-    const d = new Date();
-    const y = d.getFullYear();
-    const m = String(d.getMonth()+1).padStart(2, "0");
-    const day = String(d.getDate()).padStart(2, "0");
-    return y + "-" + m + "-" + day;
-  }
-
-  function relabelCards(){
-    document.querySelectorAll(".metric .label, .label").forEach(function(el){
-      const txt = (el.textContent || "").trim();
-
-      if(txt.toLowerCase().includes("bezpečne minúť")){
-        el.textContent = "Odhadovaný zostatok po zadaných platbách";
-        el.classList.add("warning-label");
-      }
-
-      if(txt.toLowerCase().includes("na deň do výplaty")){
-        el.textContent = "Denný odhad po zadaných platbách";
-      }
-
-      if(txt.toLowerCase().includes("odhad po najbližšej výplate")){
-        el.textContent = "Odhad po najbližšej výplate";
-        el.classList.add("projection-label");
-      }
-    });
-  }
-
-  function addLastUpdate(){
-    if(document.querySelector(".last-update-card")) return;
-
-    const card = document.createElement("div");
-    card.className = "last-update-card";
-    card.innerHTML =
-      '<strong>Posledná aktualizácia:</strong> ' +
-      'stav účtu a platby sú manuálne zadávané. ' +
-      'Ak čísla nesedia, najprv uprav aktuálny stav účtu.';
-
-    const main = document.querySelector(".main") || document.querySelector(".app") || document.body;
-    const first = main.firstElementChild;
-    if(first) main.insertBefore(card, first);
-    else main.appendChild(card);
-  }
-
-  function buildRow(item, groupClass){
-    const r = document.createElement("div");
-    r.className = "safety-review-row" + (groupClass ? " " + groupClass : "");
-    r.innerHTML =
-      '<div class="safety-review-name"></div>' +
-      '<div class="safety-review-sum"></div>' +
-      '<div class="safety-review-x" title="Nezaplatené">✕</div>' +
-      '<div class="safety-review-due"></div>' +
-      '<div class="safety-review-actions"></div>';
-    r.querySelector(".safety-review-name").textContent = item.name + (item.note ? " — " + item.note : "");
-    r.querySelector(".safety-review-sum").textContent = item.sum;
-    r.querySelector(".safety-review-due").textContent = item.dueText || "";
-    if(item.badge){
-      const b = document.createElement("span");
-      b.className = "badge " + (item.badgeClass || "");
-      b.textContent = item.badge;
-      r.querySelector(".safety-review-x").replaceWith(b);
-    }
-    if(item.payForm){
-      r.querySelector(".safety-review-actions").appendChild(item.payForm.cloneNode(true));
-    }
-    if(item.deferWidget){
-      r.querySelector(".safety-review-actions").appendChild(item.deferWidget.cloneNode(true));
-    }
-    return r;
-  }
-
-  function addGroup(list, title, items, groupClass, collapsedByDefault){
-    if(!items.length) return;
-    const wrap = collapsedByDefault ? document.createElement("details") : document.createElement("div");
-    wrap.className = "safety-review-group";
-    const heading = collapsedByDefault ? document.createElement("summary") : document.createElement("div");
-    heading.className = "safety-review-group-title";
-    heading.textContent = title + " (" + items.length + ")";
-    wrap.appendChild(heading);
-    const body = document.createElement("div");
-    body.className = "safety-review-list";
-    items.forEach(function(item){ body.appendChild(buildRow(item, groupClass)); });
-    wrap.appendChild(body);
-    list.appendChild(wrap);
-  }
-
-  function addUnpaidReview(){
-    if(document.querySelector(".safety-review")) return;
-
-    const unpaidSection = sectionByExactHeading("Nezaplatené / treba zaplatiť");
-    const deferredSection = sectionByExactHeading("Odložené");
-    const paidSection = sectionByHeadingPrefix("Zaplatené");
-    if(!unpaidSection) return;
-
-    const now = todayIso();
-    const overdue = [], soon = [], pending = [];
-
-    function scrapeActions(row){
-      return {
-        payForm: row.querySelector(".paid-quick-form"),
-        deferWidget: row.querySelector(".defer-widget"),
-      };
-    }
-
-    function nameAndNote(cell){
-      const noteEl = cell.querySelector(".small");
-      const note = noteEl ? noteEl.textContent.trim() : "";
-      const clone = cell.cloneNode(true);
-      const noteClone = clone.querySelector(".small");
-      if(noteClone) noteClone.remove();
-      return {name: clone.textContent.trim(), note: note};
-    }
-
-    Array.from(unpaidSection.querySelectorAll("tbody tr")).forEach(function(row){
-      const cells = Array.from(row.querySelectorAll("td"));
-      if(cells.length < 3) return;
-      const parsed = nameAndNote(cells[0]);
-      const name = parsed.name, note = parsed.note;
-      const sum = (cells[1].innerText || cells[1].textContent || "").trim();
-      const due = (cells[2].innerText || cells[2].textContent || "").trim();
-      if(!name || !sum) return;
-
-      const actions = scrapeActions(row);
-
-      const isOverdue = due && due < now;
-      const daysUntil = due ? Math.round((new Date(due) - new Date(now)) / 86400000) : null;
-      const isSoon = !isOverdue && daysUntil !== null && daysUntil >= 0 && daysUntil <= 3;
-      const dueText = due ? (isOverdue ? "Po splatnosti: " + due : "Termín: " + due) : "Termín nezadaný";
-      const item = {name:name, note:note, sum:sum, dueText:dueText, payForm:actions.payForm, deferWidget:actions.deferWidget, due:due};
-
-      if(isOverdue) overdue.push(item);
-      else if(isSoon) soon.push(item);
-      else pending.push(item);
-    });
-
-    [overdue, soon, pending].forEach(function(arr){
-      arr.sort(function(a,b){ return (a.due||"").localeCompare(b.due||""); });
-    });
-
-    const deferred = [];
-    if(deferredSection){
-      Array.from(deferredSection.querySelectorAll("tbody tr")).forEach(function(row){
-        const cells = Array.from(row.querySelectorAll("td"));
-        if(cells.length < 3) return;
-        const name = (cells[0].innerText || cells[0].textContent || "").trim();
-        const sum = (cells[1].innerText || cells[1].textContent || "").trim();
-        const to = (cells[2].innerText || cells[2].textContent || "").trim();
-        if(!name || !sum) return;
-        const actions = scrapeActions(row);
-        deferred.push({
-          name:name, sum:sum, dueText: "", badge: to || "Odložené", badgeClass:"warn",
-          payForm: actions.payForm, deferWidget: actions.deferWidget,
-        });
-      });
-    }
-
-    const paid = [];
-    if(paidSection){
-      Array.from(paidSection.querySelectorAll("tbody tr")).forEach(function(row){
-        const cells = Array.from(row.querySelectorAll("td"));
-        if(cells.length < 3) return;
-        const name = (cells[0].innerText || cells[0].textContent || "").trim();
-        const sum = (cells[1].innerText || cells[1].textContent || "").trim();
-        const stateEl = cells[2].querySelector(".badge");
-        const stateText = (stateEl ? stateEl.textContent : cells[2].textContent || "").trim();
-        if(!name || !sum) return;
-        paid.push({name:name, sum:sum, dueText:"", badge: stateText || "Zaplatené", badgeClass:"ok"});
-      });
-    }
-
-    if(!overdue.length && !soon.length && !pending.length && !deferred.length && !paid.length) return;
-
-    const card = document.createElement("section");
-    card.className = "safety-review";
-    card.id = "payment-review";
-    card.innerHTML =
-      '<h2>Platby</h2>' +
-      '<div class="hint">' +
-        'Dátum splatnosti nikdy neoznačí platbu automaticky — iba manuálne potvrdenie. ' +
-        (overdue.length ? '<strong style="color:#fecaca">Po splatnosti: '+overdue.length+'</strong>' : '') +
-      '</div>' +
-      '<div class="safety-review-groups"></div>';
-
-    const groups = card.querySelector(".safety-review-groups");
-    addGroup(groups, "Po splatnosti", overdue, "overdue", false);
-    addGroup(groups, "Splatné čoskoro", soon, "due-soon", false);
-    addGroup(groups, "Čaká na potvrdenie", pending, "", false);
-    addGroup(groups, "Odložené", deferred, "deferred", true);
-    addGroup(groups, "Zaplatené", paid, "paid", true);
-
-    const main = document.querySelector(".main") || document.querySelector(".app") || document.body;
-    const summary = document.querySelector(".summarygrid");
-
-    if(summary && summary.parentElement){
-      summary.parentElement.insertBefore(card, summary);
-    } else {
-      main.insertBefore(card, main.firstChild);
-    }
-  }
-
-  function markOverdueRows(){
-    const unpaidSection = sectionByExactHeading("Nezaplatené / treba zaplatiť");
-    if(!unpaidSection) return;
-
-    const now = todayIso();
-
-    unpaidSection.querySelectorAll("tbody tr").forEach(function(row){
-      const cells = Array.from(row.querySelectorAll("td"));
-      if(cells.length < 3) return;
-
-      const due = (cells[2].innerText || cells[2].textContent || "").trim();
-      if(due && due < now){
-        row.classList.add("overdue");
-        row.style.borderColor = "rgba(239,68,68,.75)";
-        row.style.background = "rgba(127,29,29,.22)";
-      }
-    });
-  }
-
-  ready(function(){
-    relabelCards();
-    addLastUpdate();
-    addUnpaidReview();
-    markOverdueRows();
-  });
-})();
-</script>
-
-
-<script>
-/* BP_BALANCE_FIRST_V1 */
-(function(){
-  function ready(fn){ if(document.readyState !== "loading") fn(); else document.addEventListener("DOMContentLoaded", fn); }
-  function txt(el){ return (el.textContent || "").trim().toLowerCase(); }
-
-  ready(function(){
-    // Hide cards/sections that are about income/payday/projection.
-    document.querySelectorAll(".card,.section").forEach(function(card){
-      const t = txt(card);
-      if(
-        t.includes("príjem") ||
-        t.includes("výplata") ||
-        t.includes("najbližšej výplate") ||
-        t.includes("ďalšia výplata")
-      ){
-        // Do not hide payment cards that only mention "do výplaty" in old labels.
-        if(!t.includes("nezaplatené / treba zaplatiť") && !t.includes("platby")){
-          card.classList.add("hidden-income-card");
-        }
-      }
-    });
-
-    // Relabel old labels defensively.
-    document.querySelectorAll(".metric .label, .label, h2, h3").forEach(function(el){
-      let v = el.textContent || "";
-      v = v.replace(/Bezpečne minúť teraz \(pred výplatou\)/gi, "Odhadovaný zostatok po zadaných platbách");
-      v = v.replace(/Bezpečne minúť/gi, "Odhadovaný zostatok");
-      v = v.replace(/Na deň do výplaty/gi, "Denný orientačný zostatok");
-      v = v.replace(/Nezaplatené do výplaty/gi, "Nezaplatené zadané platby");
-      v = v.replace(/Chýba do výplaty/gi, "Chýba po zadaných platbách");
-      v = v.replace(/Odhad po najbližšej výplate.*$/gi, "Voliteľný budúci príjem");
-      el.textContent = v;
-    });
-
-    // Add explanation banner near top.
-    if(!document.querySelector(".balance-first-note")){
-      const note = document.createElement("div");
-      note.className = "balance-first-note";
-      note.innerHTML =
-        '<strong>Počítame z peňazí, ktoré sú na účte teraz.</strong> ' +
-        'Výplata sa nepripočíta dopredu. Odhad vzniká z aktuálneho stavu účtu, ' +
-        'nezaplatených platieb a obálok.';
-
-      const main = document.querySelector(".main") || document.querySelector(".app") || document.body;
-      main.insertBefore(note, main.firstElementChild || null);
-    }
-  });
-})();
-</script>
-
-
-<script>
-/* BP_EDITABLE_ENVELOPES_V1 */
-(function(){
-  function ready(fn){
-    if(document.readyState !== "loading") fn();
-    else document.addEventListener("DOMContentLoaded", fn);
-  }
-
-  function eur(v){
-    return Number(v || 0).toLocaleString("sk-SK", {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2
-    }) + " €";
-  }
-
-  function envelopeIcon(name){
-    const n = (name || "").toLowerCase();
-    if(/strava|potravin|jedlo|food/.test(n)) return "🛒";
-    if(/nafta|palivo|fuel|benzin/.test(n)) return "⛽";
-    if(/byv|domac|najom|hypotek/.test(n)) return "🏠";
-    if(/zabav|volny|hobby/.test(n)) return "🎮";
-    if(/oblec|shop/.test(n)) return "👕";
-    if(/zdrav|lekar|liek/.test(n)) return "💊";
-    return "💶";
-  }
-
-  function addCard(summary){
-    if(document.querySelector(".editable-envelopes")) return;
-
-    const envelopes = summary.envelope_items || [];
-    if(!envelopes.length) return;
-
-    const total = envelopes.reduce(function(sum, e){
-      return sum + Number(e.budget ?? e.amount ?? 0);
-    }, 0);
-
-    const card = document.createElement("section");
-    card.className = "editable-envelopes";
-    card.id = "envelopes";
-    card.innerHTML =
-      '<h2>Obálky</h2>' +
-      '<div class="hint">Mesačné rozpočty po kategóriách. Zostávajúca suma sa odpočítava v reálnom odhade. Plán spolu: <strong>'+eur(total)+'</strong></div>' +
-      '<div class="envelope-grid"></div>';
-
-    const grid = card.querySelector(".envelope-grid");
-
-    envelopes.forEach(function(e){
-      const budget = Number(e.budget ?? e.amount ?? 0);
-      const spent = Number(e.spent || 0);
-      const remaining = Number(e.remaining || 0);
-      const over = Number(e.over || 0);
-      const pct = budget > 0 ? Math.min((spent / budget) * 100, 100) : 0;
-      const nearlyExhausted = !over && budget > 0 && (remaining / budget) <= 0.15;
-      const state = over > 0 ? "over" : nearlyExhausted ? "warn" : "";
-
-      const envCard = document.createElement("div");
-      envCard.className = "envelope-card" + (state ? " " + state : "");
-      envCard.innerHTML =
-        '<div class="envelope-card-head">' +
-          '<span class="envelope-card-title"><span class="envelope-card-icon">'+envelopeIcon(e.name)+'</span>' +
-          '<span class="envelope-card-name">'+(e.name||"Obálka")+'</span></span>' +
-          '<span class="envelope-card-remaining">'+eur(remaining)+' ostáva</span>' +
-        '</div>' +
-        '<div class="envelope-progress-bar"><div class="envelope-progress-fill'+(state?" "+state:"")+'" style="width:'+pct+'%"></div></div>' +
-        '<div class="envelope-card-sub">'+eur(budget)+' plán · '+eur(spent)+' minuté</div>' +
-        (over > 0 ? '<div class="envelope-card-over">Prekročené o '+eur(over)+'</div>' : '') +
-        '<div class="envelope-card-actions">' +
-          '<a class="envelope-card-btn" href="#expense-quick">+ Výdavok</a>' +
-          '<button type="button" class="envelope-card-btn secondary envelope-toggle-edit">Upraviť</button>' +
-        '</div>' +
-        '<form class="envelope-edit-row" method="post" action="/api/envelopes/update" hidden>' +
-          '<input type="hidden" name="id">' +
-          '<div><label>Názov</label><input name="name"></div>' +
-          '<div><label>Mesačná suma</label><input name="amount" inputmode="decimal" type="number" step="0.01" min="0"></div>' +
-          '<div><button type="submit">Uložiť</button></div>' +
-        '</form>';
-
-      const editForm = envCard.querySelector(".envelope-edit-row");
-      editForm.querySelector('input[name="id"]').value = e.id || "";
-      editForm.querySelector('input[name="name"]').value = e.name || "";
-      editForm.querySelector('input[name="amount"]').value = budget;
-
-      envCard.querySelector(".envelope-toggle-edit").addEventListener("click", function(){
-        editForm.hidden = !editForm.hidden;
-      });
-
-      grid.appendChild(envCard);
-    });
-
-    const main = document.querySelector(".main") || document.querySelector(".app") || document.body;
-
-    const afterSummary = document.querySelector(".envelope-summary");
-    if(afterSummary && afterSummary.parentElement){
-      afterSummary.parentElement.insertBefore(card, afterSummary.nextSibling);
-    } else {
-      main.insertBefore(card, main.firstElementChild || null);
-    }
-  }
-
-  ready(function(){
-    // Full envelope-grid cards are a /envelopes-only detail view now; the
-    // dashboard shows a short summary instead (server-rendered).
-    if(window.BP_ACTIVE_VIEW !== "envelopes") return;
-    fetch("/api/balance-first-summary", {cache:"no-store"})
-      .then(function(r){ return r.json(); })
-      .then(addCard)
-      .catch(function(err){ console.error("envelope editor failed", err); });
-  });
-})();
-</script>
-
-
-<script>
-/* BP_TOP_REVIEW_DEFER_V1 */
-(function(){
-  function ready(fn){
-    if(document.readyState !== "loading") fn();
-    else document.addEventListener("DOMContentLoaded", fn);
-  }
-
-  function cleanText(x){
-    return (x || "").replace(/\s+/g, " ").trim();
-  }
-
-  function keyFromNameSum(name, sum){
-    return cleanText(name).toLowerCase() + "||" + cleanText(sum).replace(/\s/g, "");
-  }
-
-  function findUnpaidSection(){
-    const headings = Array.from(document.querySelectorAll("h2"));
-    const h = headings.find(function(x){
-      return cleanText(x.textContent).toLowerCase() === "nezaplatené / treba zaplatiť";
-    });
-    return h ? (h.closest(".card, .section") || h.parentElement) : null;
-  }
-
-  function isPaidForm(form){
-    if(!form) return false;
-    if(form.querySelector('input[name="state"][value="paid_me"]')) return true;
-    if(form.querySelector('input[name="state"][value="paid"]')) return true;
-    const t = cleanText(form.textContent).toLowerCase();
-    return t.includes("z účtu") || t.includes("zaplaten");
-  }
-
-  function isDeferForm(form){
-    if(!form) return false;
-    if(form.querySelector('input[name="state"][value="deferred"]')) return true;
-    if(form.querySelector('select[name*="defer"]')) return true;
-    if(form.querySelector('input[name*="defer"]')) return true;
-    const t = cleanText(form.textContent).toLowerCase();
-    return t.includes("odložiť") || t.includes("odloz") || t.includes("defer");
-  }
-
-  function buildOriginalFormMap(){
-    const map = new Map();
-    const section = findUnpaidSection();
-    if(!section) return map;
-
-    Array.from(section.querySelectorAll("tbody tr")).forEach(function(row){
-      const cells = Array.from(row.querySelectorAll("td"));
-      if(cells.length < 2) return;
-
-      const name = cleanText(cells[0].innerText || cells[0].textContent);
-      const sum = cleanText(cells[1].innerText || cells[1].textContent);
-      if(!name || !sum) return;
-
-      const forms = Array.from(row.querySelectorAll("form"));
-      const paidForm = forms.find(isPaidForm);
-      const deferForm = forms.find(isDeferForm);
-
-      map.set(keyFromNameSum(name, sum), {
-        paidForm: paidForm || null,
-        deferForm: deferForm || null
-      });
-    });
-
-    return map;
-  }
-
-  function patchTopRows(){
-    const map = buildOriginalFormMap();
-    if(!map.size) return;
-
-    const rows = Array.from(document.querySelectorAll(
-      ".safety-review-row, .unpaid-confirm-row, .manual-confirm-row"
-    ));
-
-    rows.forEach(function(row){
-      if(row.dataset.deferPatched === "1") return;
-
-      const nameEl = row.querySelector(".safety-review-name, .unpaid-confirm-name, .manual-confirm-name");
-      const sumEl = row.querySelector(".safety-review-sum, .unpaid-confirm-sum, .manual-confirm-sum");
-      const actions = row.querySelector(".safety-review-actions, .unpaid-confirm-actions, .manual-confirm-actions");
-
-      if(!nameEl || !sumEl || !actions) return;
-
-      const key = keyFromNameSum(nameEl.textContent, sumEl.textContent);
-      const original = map.get(key);
-      if(!original) return;
-
-      // Existing top panel usually already has paid form, but normalize its label/class.
-      const existingForms = Array.from(actions.querySelectorAll("form"));
-      existingForms.forEach(function(f){
-        if(isPaidForm(f)){
-          f.classList.add("bp-paid-form");
-          const b = f.querySelector("button");
-          if(b) b.textContent = "✓ Zaplatené";
-        }
-      });
-
-      if(original.deferForm && !actions.querySelector(".bp-defer-form")){
-        const deferClone = original.deferForm.cloneNode(true);
-        deferClone.classList.add("bp-defer-form");
-
-        const button = deferClone.querySelector("button");
-        if(button){
-          button.textContent = "↷ Odložiť";
-          button.title = "Odložiť platbu";
-        }
-
-        actions.appendChild(deferClone);
-      }
-
-      row.dataset.deferPatched = "1";
-    });
-  }
-
-  // patchTopRows() is no longer called: BP_UX_SAFETY_V2's addUnpaidReview()
-  // now builds the .safety-review-row actions (paid button + defer widget)
-  // directly, correctly, including for carried-over deferred items. Calling
-  // patchTopRows() here too would append a second, stale defer action onto
-  // rows it already owns.
-})();
-</script>
-
-
-
-<script>
-/* BP_TOP_REAL_OVERVIEW_V5 */
-(function(){
-  function ready(fn){ if(document.readyState !== "loading") fn(); else document.addEventListener("DOMContentLoaded", fn); }
-  function eur(v){ return Number(v || 0).toLocaleString("sk-SK",{minimumFractionDigits:2,maximumFractionDigits:2})+" €"; }
-  function cls(v){ const n=Number(v||0); if(n<0)return"bad"; if(n<100)return"warn"; return"good"; }
-  function envCls(data, remainingEnv){
-    const over = Number(data.envelopes_over_total||0) > 0;
-    const total = Number(data.envelopes_total||0);
-    if(over) return "warn";
-    if(total > 0 && (remainingEnv/total) <= 0.15) return "warn";
-    return "teal";
-  }
-  function formatUpdated(iso){
-    const d = new Date(iso);
-    if(isNaN(d.getTime())) return iso;
-    const now = new Date();
-    const pad = function(n){ return String(n).padStart(2,"0"); };
-    const time = pad(d.getHours()) + ":" + pad(d.getMinutes());
-    const sameDay = d.toDateString() === now.toDateString();
-    if(sameDay) return "dnes " + time;
-    return pad(d.getDate()) + "." + pad(d.getMonth()+1) + ". " + time;
-  }
-
-  function hideOldMetricCards(){
-    document.querySelectorAll(".topgrid,.summarygrid,.envelope-summary,.fin-overview").forEach(function(el){
-      el.classList.add("bp-hide-old-metrics");
-    });
-  }
-
-  function render(data){
-    hideOldMetricCards();
-    if(document.querySelector(".real-top")) return;
-
-    const remainingEnv = Number(data.envelopes_remaining_total ?? data.envelopes_total ?? 0);
-    const finalValue = Number(data.estimated_after_payments_and_envelopes || 0);
-    const missing = Number(data.missing_after_everything || 0);
-    const envState = envCls(data, remainingEnv);
-
-    const caption = finalValue < 0
-      ? "Na pokrytie nezaplatených platieb a obálok treba ešte " + eur(missing) + "."
-      : "Po platbách a obálkach ostáva " + eur(finalValue) + ".";
-
-    const updatedText = data.last_manual_review
-      ? "Aktualizované: " + formatUpdated(data.last_manual_review)
-      : "Stav účtu ešte nebol zadaný";
-
-    const card = document.createElement("section");
-    card.className = "real-top";
-    card.innerHTML =
-      '<div class="real-top-head"><h2>Reálny mesačný prehľad</h2></div>' +
-      '<div class="real-hero">' +
-        '<div class="real-hero-value '+cls(finalValue)+'">'+eur(finalValue)+'</div>' +
-        '<div class="real-hero-caption '+(finalValue < 0 ? 'bad' : 'ok')+'">'+caption+'</div>' +
-      '</div>' +
-      '<div class="real-sub-grid">' +
-        '<div class="real-metric"><div class="real-label">Účet</div><div class="real-value">'+eur(data.current_balance)+'</div></div>' +
-        '<div class="real-metric"><div class="real-label">Nezaplatené</div><div class="real-value bad">-'+eur(data.unpaid_payments_total)+'</div></div>' +
-        '<div class="real-metric"><div class="real-label">Obálky ostáva</div><div class="real-value '+envState+'">'+eur(remainingEnv)+'</div></div>' +
-      '</div>' +
-      '<div class="real-updated-line">' +
-        '<button type="button" class="real-refresh-btn" title="Obnoviť">↻</button>' +
-        '<span>'+updatedText+'</span>' +
-      '</div>' +
-      '<details class="real-balance-toggle" id="balance-update-field">' +
-        '<summary>✎ Upraviť stav účtu</summary>' +
-        '<form class="real-update" method="post" action="/api/balance/update">' +
-          '<div><label>Nový stav účtu</label><input name="account_balance" inputmode="decimal" type="number" step="0.01" value="'+Number(data.current_balance||0)+'"></div>' +
-          '<div><button type="submit">Uložiť stav</button></div>' +
-        '</form>' +
-      '</details>' +
-      '<details class="real-formula"><summary>Vzorec výpočtu</summary>' +
-      '<div class="real-calc">' +
-        '<div>Aktuálny stav účtu</div><div class="amount">'+eur(data.current_balance)+'</div>' +
-        '<div>- nezaplatené platby</div><div class="amount bad">-'+eur(data.unpaid_payments_total)+'</div>' +
-        '<div>- zostávajúce obálky</div><div class="amount warn">-'+eur(remainingEnv)+'</div>' +
-        '<div class="total">= reálny odhad</div><div class="amount total '+cls(finalValue)+'">'+eur(finalValue)+'</div>' +
-      '</div></details>';
-
-    const main=document.querySelector(".main") || document.querySelector(".app") || document.body;
-    main.insertBefore(card, main.firstElementChild || null);
-
-    const quick = document.createElement("div");
-    quick.className = "quick-actions-grid";
-    quick.innerHTML =
-      '<a class="qa-btn qa-blue" href="/expenses#expense-quick">+ Výdavok</a>' +
-      '<a class="qa-btn qa-purple" href="/receipts">📷 OCR bloček</a>' +
-      '<a class="qa-btn qa-blue" href="/payments">✓ Platby</a>' +
-      '<a class="qa-btn qa-orange" href="/deferred">↷ Odložené</a>' +
-      '<a class="qa-btn qa-teal" href="/envelopes">✉ Obálky</a>' +
-      '<a class="qa-btn qa-gray" href="#balance-update-field">✎ Stav účtu</a>';
-    card.insertAdjacentElement("afterend", quick);
-
-    const refreshBtn = card.querySelector(".real-refresh-btn");
-    if(refreshBtn){
-      refreshBtn.addEventListener("click", function(){
-        refreshBtn.classList.add("spinning");
-        setTimeout(function(){ window.location.reload(); }, 250);
-      });
-    }
-
-    const balanceBtn = quick.querySelector(".qa-gray");
-    if(balanceBtn){
-      balanceBtn.addEventListener("click", function(e){
-        const details = document.getElementById("balance-update-field");
-        if(details){
-          e.preventDefault();
-          details.open = true;
-          details.scrollIntoView({behavior:"smooth", block:"start"});
-        }
-      });
-    }
-  }
-
-  ready(function(){
-    hideOldMetricCards();
-    setTimeout(hideOldMetricCards,500);
-    setTimeout(hideOldMetricCards,1500);
-    // The hero is a dashboard-only overview now; detail views (/payments,
-    // /envelopes, ...) stay lean per the app-views layout.
-    if(window.BP_ACTIVE_VIEW !== "dashboard") return;
-    fetch("/api/balance-first-summary",{cache:"no-store"}).then(r=>r.json()).then(render).catch(console.error);
-  });
-})();
-</script>
-
-<script>
-/* BP_DEFER_DATE_REQUIRED_V1: require a target date for every "Odložiť"
-   action instead of a silent one-click +7-days. Event-delegated on
-   document so it also covers .defer-widget instances that other
-   patches (BP_UX_SAFETY_V2) clone into the payment-review card. */
-(function(){
-  function pad(n){ return String(n).padStart(2, "0"); }
-  function iso(d){ return d.getFullYear() + "-" + pad(d.getMonth()+1) + "-" + pad(d.getDate()); }
-  function endOfMonth(d){ return new Date(d.getFullYear(), d.getMonth()+1, 0); }
-
-  document.addEventListener("click", function(e){
-    const toggle = e.target.closest(".defer-toggle");
-    if(toggle){
-      const form = toggle.parentElement.querySelector(".defer-form");
-      if(form) form.hidden = !form.hidden;
-      return;
-    }
-    const cancel = e.target.closest(".defer-cancel");
-    if(cancel){
-      const form = cancel.closest(".defer-form");
-      if(form) form.hidden = true;
-      return;
-    }
-    const quick = e.target.closest(".defer-quick");
-    if(quick){
-      const form = quick.closest(".defer-form");
-      const input = form ? form.querySelector(".defer-date-input") : null;
-      if(!input) return;
-      const today = new Date();
-      let target = null;
-      if(quick.dataset.quick === "7d"){
-        target = new Date(today);
-        target.setDate(target.getDate() + 7);
-      } else if(quick.dataset.quick === "next_month"){
-        target = new Date(today.getFullYear(), today.getMonth() + 1, today.getDate());
-      } else if(quick.dataset.quick === "end_month"){
-        target = endOfMonth(today);
-      } else if(quick.dataset.quick === "today"){
-        target = today;
-      }
-      if(target) input.value = iso(target);
-      return;
-    }
-  });
-
-  document.addEventListener("submit", function(e){
-    const form = e.target.closest(".defer-form");
-    if(!form) return;
-    const input = form.querySelector(".defer-date-input");
-    if(!input || !input.value){
-      e.preventDefault();
-      if(input) input.reportValidity();
-    }
-  });
-})();
-</script>
-
-<script>
-/* BP_EDIT_FORM_SCROLL_V1: the edit form for an income/payment/expense
-   lives in the sidebar, which on mobile renders BELOW all the main
-   content (.sidebar{order:2}) -- clicking "Upraviť" otherwise looks
-   like nothing happened. Scroll it into view and flash a highlight so
-   it's obvious where to look, on both desktop and mobile. */
-(function(){
-  function ready(fn){ if(document.readyState !== "loading") fn(); else document.addEventListener("DOMContentLoaded", fn); }
-  ready(function(){
-    var id = window.BP_EDIT_TARGET;
-    if(!id) return;
-    var el = document.getElementById(id);
-    if(!el) return;
-    el.scrollIntoView({behavior:"smooth", block:"start"});
-    el.classList.add("edit-target-flash");
-    setTimeout(function(){ el.classList.remove("edit-target-flash"); }, 2200);
-  });
-})();
-</script>
-
-<script>
-/* BP_FULL_RESET_CONFIRM_V1: "Vymazať všetko" only submits once the typed
-   text exactly matches the required code -- this is a UX convenience
-   only, the server independently re-checks the same code and rejects
-   anything else (never trust client-side-only gating for something this
-   destructive). A native confirm() is a second speed bump. */
-(function(){
-  function ready(fn){ if(document.readyState !== "loading") fn(); else document.addEventListener("DOMContentLoaded", fn); }
-  ready(function(){
-    var form = document.getElementById("reset-form");
-    var input = document.getElementById("reset-confirm-input");
-    var btn = document.getElementById("reset-submit-btn");
-    if(!form || !input || !btn) return;
-    var required = (btn.dataset.code || "").toUpperCase();
-    input.addEventListener("input", function(){
-      btn.disabled = input.value.trim().toUpperCase() !== required;
-    });
-    form.addEventListener("submit", function(e){
-      if(!window.confirm("Naozaj vymazať úplne všetko? Dá sa to vrátiť len ručne zo zálohy na serveri.")){
-        e.preventDefault();
-      }
-    });
-  });
-})();
-</script>
-
-</body>
-</html>
-"""
+APP_TEMPLATE = "app.html"
 
 def resolve_payments_for_cycle(payments, today):
     """Each template resolved to its due date for `today`'s month, plus the
@@ -2311,6 +835,45 @@ def three_month_forecast(today, months=3):
     return result
 
 def render_page(edit_income=None, edit_payment=None, edit_expense=None, active_view="dashboard"):
+    view_meta = {
+        "dashboard": (
+            "Prehľad",
+            "Reálny zostatok, otvorené platby, obálky a posledná aktivita na jednom mieste.",
+        ),
+        "payments": (
+            "Platby",
+            "Pracovný zoznam povinností: zaplatiť, odložiť, upraviť alebo zmeniť stav.",
+        ),
+        "deferred": (
+            "Odložené",
+            "Platby s novým termínom, rozdelené podľa toho, kedy sa majú vrátiť do pozornosti.",
+        ),
+        "envelopes": (
+            "Obálky",
+            "Mesačné limity a priebeh míňania podľa kategórií.",
+        ),
+        "expenses": (
+            "Výdavky",
+            "Rýchle ručné výdavky a ich história za aktuálne dáta.",
+        ),
+        "receipts": (
+            "OCR bloček",
+            "Nahraj účtenku, skontroluj rozpoznanú sumu a ulož ju ako výdavok.",
+        ),
+        "history": (
+            "História",
+            "Časová os zmien v zostatku, platbách, výdavkoch a obálkach.",
+        ),
+        "manage": (
+            "Správa",
+            "Nastavenia, platobné šablóny, dlhy, história a diagnostika na jednom mieste.",
+        ),
+        "settings": (
+            "Nastavenia",
+            "Účet, rezerva, príjem a diagnostika dát aplikácie.",
+        ),
+    }
+    view_title, view_subtitle = view_meta.get(active_view, view_meta["dashboard"])
     settings = load(SETTINGS, {"account_balance":0,"use_reserve":False,"safe_min":0})
     incomes = load(INCOMES, [])
     payments = load(PAYMENTS, [])
@@ -2385,17 +948,20 @@ def render_page(edit_income=None, edit_payment=None, edit_expense=None, active_v
     ]
 
     dash = parse_dash(core)
+    balance_summary = bfs.build_balance_first_summary()
+    final_available = balance_summary["estimated_after_payments_and_envelopes"]
     summary = {
-        "balance": dash["balance"],
-        "unpaid_total": dash["unpaid_total"],
-        "shortfall": dash["shortfall"],
-        "safe_to_spend": dash["money"],
+        "balance": eur(balance_summary["current_balance"]),
+        "unpaid_total": eur(balance_summary["unpaid_payments_total"]),
+        "shortfall": eur(balance_summary["missing_after_everything"]) if balance_summary["missing_after_everything"] else "-",
+        "safe_to_spend": eur(final_available),
         "daily_safe_to_spend": dash["day"],
         "projected_after_payday": dash["projected_after_payday"],
         "next_payday": dash["next_payday"] if dash["next_payday"] != "-" else (
             f"deň {settings.get('payday_day')}" if settings.get("payday_day") else "-"
         ),
     }
+    dash["status_class"] = value_class(final_available)
 
     income_form = {"name":"Výplata netto","amount":"2000","day":"15"}
     payment_form = payment_form_from_item(None)
@@ -2423,9 +989,15 @@ def render_page(edit_income=None, edit_payment=None, edit_expense=None, active_v
                 "candidates": stored.get("candidates", []),
             }
 
-    return render_template_string(
-        HTML,
+    problem_reports = _build_problem_reports(_debug_balance_context())
+    backups = _list_backups()
+    system_status = _build_system_status(problem_reports, backups, setup_needed, settings)
+
+    return render_template(
+        APP_TEMPLATE,
         active_view=active_view,
+        view_title=view_title, view_subtitle=view_subtitle,
+        balance_summary=balance_summary, eur=eur,
         settings=settings, incomes=incomes, payments=payments, expenses=expenses,
         core=core, dash=dash, summary=summary, today=today.isoformat(),
         payments_resolved=payments_resolved, cycle_key=cycle_key,
@@ -2450,6 +1022,9 @@ def render_page(edit_income=None, edit_payment=None, edit_expense=None, active_v
         audit_entries=_with_day_and_time(list(reversed(audit_log.load_audit_log(AUDIT_LOG_PATH)))[:30]),
         audit_action_label=AUDIT_ACTION_LABEL,
         reset_confirm_code=RESET_CONFIRM_CODE,
+        system_status=system_status,
+        problem_reports=problem_reports,
+        backups=backups,
     )
 
 @app.route("/")
@@ -2474,11 +1049,15 @@ def expenses_view():
 
 @app.route("/history")
 def history_view():
-    return render_page(active_view="history")
+    return render_page(active_view="manage")
+
+@app.route("/manage")
+def manage_view():
+    return render_page(active_view="manage")
 
 @app.route("/settings", methods=["GET"])
 def settings_view():
-    return render_page(active_view="settings")
+    return render_page(active_view="manage")
 
 @app.route("/receipts")
 def receipts_view():
@@ -2486,15 +1065,45 @@ def receipts_view():
 
 @app.route("/edit/income/<int:i>")
 def edit_income(i):
-    return render_page(edit_income=i, active_view="settings")
+    return render_page(edit_income=i, active_view="manage")
 
 @app.route("/edit/payment/<int:i>")
 def edit_payment(i):
-    return render_page(edit_payment=i, active_view="payments")
+    return render_page(edit_payment=i, active_view="manage")
 
 @app.route("/edit/expense/<int:i>")
 def edit_expense(i):
     return render_page(edit_expense=i, active_view="expenses")
+
+@app.get("/debug/balance")
+def debug_balance_view():
+    ctx = _debug_balance_context()
+    return render_template(
+        "debug_balance.html",
+        s=ctx["summary"],
+        orphan_events=ctx["orphan_events"],
+        invalid_payments=ctx["invalid_payments"],
+        orphan_events_json=json.dumps(ctx["orphan_events"], indent=2, ensure_ascii=False),
+        invalid_payments_json=json.dumps(ctx["invalid_payments"], indent=2, ensure_ascii=False),
+        eur=eur,
+    )
+
+@app.get("/problems")
+def problems_view():
+    ctx = _debug_balance_context()
+    return render_template(
+        "problems.html",
+        problems=_build_problem_reports(ctx),
+        summary=ctx["summary"],
+        eur=eur,
+    )
+
+@app.post("/api/payment-action-impact")
+def api_payment_action_impact():
+    impact = _payment_action_impact(request.form.get("action_path", ""), request.form)
+    if not impact:
+        return jsonify({"ok": False})
+    return jsonify({"ok": True, "impact": impact, "message": _impact_message(impact)})
 
 @app.post("/settings")
 def settings_save():
@@ -2528,9 +1137,7 @@ def settings_reset():
     if code != RESET_CONFIRM_CODE:
         return redirect("/settings?reset_error=1")
 
-    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-    backup_dir = BASE / "backups" / f"{ts}-full-reset"
-    shutil.copytree(DATA, backup_dir / "data")
+    backup_dir = _create_data_backup("full-reset")
 
     for name in RESET_DATA_FILES:
         save(DATA / name, {} if name == "settings.json" else [])
@@ -2547,6 +1154,21 @@ def settings_reset():
     }])
 
     return redirect("/")
+
+@app.post("/settings/restore")
+def settings_restore():
+    code = (request.form.get("confirm_code") or "").strip().upper()
+    backup_name = (request.form.get("backup_name") or "").strip()
+    if code != RESET_CONFIRM_CODE:
+        return redirect("/manage?restore_error=code#backups")
+
+    restored = _restore_backup(backup_name)
+    if not restored:
+        return redirect("/manage?restore_error=backup#backups")
+
+    backup_dir, pre_restore = restored
+    log_audit("backup_restored", f"restored: {backup_dir.name}; previous: {pre_restore.name}")
+    return redirect(f"/manage?restored={backup_dir.name}#backups")
 
 @app.post("/income/add")
 def income_add():
@@ -2623,9 +1245,7 @@ def payment_set_state(i):
     if i < len(data) and new_state in SELECTABLE_STATES and data[i].get("id"):
         today = date.today()
         cycle_key = pe.get_current_cycle_key(today)
-        events = pe.load_payment_events()
-        events = pe.set_payment_event(events, data[i]["id"], cycle_key, new_state)
-        pe.save_payment_events(events)
+        _set_payment_state_event(data[i]["id"], cycle_key, new_state, data[i].get("amount", 0))
         if new_state == PAID_ME:
             log_audit("payment_paid", f"{data[i].get('name')} {data[i].get('amount')} €")
     return go_home()
@@ -2653,13 +1273,9 @@ def payment_set_state_by_id():
     cycle_key = request.form.get("cycle_key", "").strip()
     new_state = request.form.get("state", PENDING)
     if payment_id and cycle_key and new_state in SELECTABLE_STATES:
-        events = pe.load_payment_events()
-        events = pe.set_payment_event(events, payment_id, cycle_key, new_state)
-        pe.save_payment_events(events)
+        amount, label = _payment_amount_and_label(payment_id)
+        _set_payment_state_event(payment_id, cycle_key, new_state, amount)
         if new_state == PAID_ME:
-            data = load(PAYMENTS, [])
-            template = next((p for p in data if p.get("id") == payment_id), None)
-            label = template.get("name") if template else payment_id
             log_audit("payment_paid", f"{label}")
     return go_home()
 
@@ -2696,9 +1312,27 @@ def payment_defer_by_id():
 @app.post("/payment/delete/<int:i>")
 def payment_delete(i):
     data = load(PAYMENTS, [])
-    if i < len(data): data.pop(i)
+    if i < len(data):
+        payment_id = data[i].get("id")
+        data.pop(i)
+        if payment_id:
+            _cleanup_payment_events(payment_id)
     save(PAYMENTS, data)
     return go_home()
+
+def _parse_expense_date(raw):
+    """Normalize a user-supplied date string to a zero-padded ISO-8601 date.
+
+    Falls back to today's date if the input can't be parsed, since a single-digit
+    day/month (e.g. "2026-07-7") would otherwise be stored as-is and later crash
+    date.fromisoformat() in calc_month().
+    """
+    raw = (raw or "").strip()
+    try:
+        year, month, day = raw.split("-")
+        return date(int(year), int(month), int(day)).isoformat()
+    except (TypeError, ValueError):
+        return date.today().isoformat()
 
 @app.post("/expense/add")
 def expense_add():
@@ -2709,7 +1343,7 @@ def expense_add():
         item = {
             "name": name,
             "amount": float(amount),
-            "date": request.form.get("date", date.today().isoformat()),
+            "date": _parse_expense_date(request.form.get("date")),
             "source": receipts.SOURCE_MANUAL,
         }
         if merchant:
@@ -2727,7 +1361,7 @@ def expense_update(i):
         updates = {
             "name": request.form.get("name","Výdavok"),
             "amount": float(request.form.get("amount",0) or 0),
-            "date": request.form.get("date", date.today().isoformat()),
+            "date": _parse_expense_date(request.form.get("date")),
         }
         data[i] = {**data[i], **updates}
     save(EXPENSES, data)
@@ -2826,9 +1460,7 @@ def onetime_set_state(i):
     if i < len(data) and new_state in SELECTABLE_STATES and data[i].get("id"):
         today = date.today()
         cycle_key = pe.get_current_cycle_key(today)
-        events = pe.load_payment_events()
-        events = pe.set_payment_event(events, data[i]["id"], cycle_key, new_state)
-        pe.save_payment_events(events)
+        _set_payment_state_event(data[i]["id"], cycle_key, new_state, data[i].get("amount", 0))
     return go_home()
 
 @app.post("/onetime/defer/<int:i>")
@@ -2845,7 +1477,11 @@ def onetime_defer(i):
 @app.post("/onetime/delete/<int:i>")
 def onetime_delete(i):
     data = load(ONETIME, [])
-    if i < len(data): data.pop(i)
+    if i < len(data):
+        payment_id = data[i].get("id")
+        data.pop(i)
+        if payment_id:
+            _cleanup_payment_events(payment_id)
     save(ONETIME, data)
     return go_home()
 
@@ -2855,7 +1491,7 @@ def receipt_image(receipt_id):
     # up front rather than letting a crafted id walk the receipts dir.
     if not re.fullmatch(r"[0-9a-f]{12}", receipt_id):
         abort(404)
-    for ext in (".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"):
+    for ext in sorted(ALLOWED_RECEIPT_EXTENSIONS):
         candidate = RECEIPTS_DIR / f"{receipt_id}{ext}"
         if candidate.exists():
             return send_file(candidate)
@@ -2869,7 +1505,9 @@ def receipt_upload():
 
     RECEIPTS_DIR.mkdir(parents=True, exist_ok=True)
     receipt_id = uuid.uuid4().hex[:12]
-    ext = Path(file.filename).suffix or ".jpg"
+    ext = Path(file.filename).suffix.lower() or ".jpg"
+    if ext not in ALLOWED_RECEIPT_EXTENSIONS:
+        abort(400)
     image_path = RECEIPTS_DIR / f"{receipt_id}{ext}"
     file.save(image_path)
 
@@ -2917,110 +1555,13 @@ def receipt_confirm():
         (RECEIPTS_DIR / f"{receipt_id}.review.json").unlink(missing_ok=True)
     return go_home()
 
-SETUP_HTML = """
-<!doctype html>
-<html lang="sk">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>BudgetPilot — nastavenie</title>
-<style>
-:root{--bg:#0f172a;--card:#1f2937;--line:#374151;--text:#e5e7eb;--muted:#9ca3af;--blue:#2563eb;--red:#b91c1c;--green:#22c55e;--orange:#f59e0b}
-*{box-sizing:border-box}
-body{margin:0;background:linear-gradient(135deg,#0f172a,#111827);color:var(--text);font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:18px}
-.wrap{max-width:520px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
-.card{background:rgba(31,41,55,.95);border:1px solid var(--line);border-radius:18px;padding:18px;box-shadow:0 12px 30px rgba(0,0,0,.25)}
-h1{font-size:26px;margin:0 0 6px} h2{font-size:19px;margin:0 0 12px}
-label{display:block;margin-top:8px;font-size:13px;color:var(--muted)}
-input,select{width:100%;padding:11px 12px;border-radius:12px;border:1px solid #4b5563;background:#0b1220;color:var(--text);margin-top:6px}
-button{padding:10px 14px;border:0;border-radius:12px;background:var(--blue);color:white;font-weight:700;cursor:pointer}
-.danger{background:var(--red)} .secondary{background:#4b5563}
-.btn-row{display:flex;gap:8px;margin-top:10px}.btn-row button{flex:1}
-.small{font-size:13px;color:var(--muted);line-height:1.35}
-table{width:100%;border-collapse:collapse} th,td{padding:9px 6px;border-bottom:1px solid var(--line);text-align:left;font-size:13px} th{color:var(--muted)}
-.actions{display:flex;gap:6px;justify-content:flex-end}.actions form{margin:0}
-.badge{display:inline-block;padding:4px 8px;border-radius:999px;font-size:12px;background:#374151}
-.badge.ok{background:#14532d}
-a{color:white;text-decoration:none}
-</style>
-</head>
-<body>
-<div class="wrap">
-
-<div class="card">
-<h1>Nastavenie</h1>
-<div class="small">Toto vyplníš raz na začiatku a potom vždy, keď príde výplata.</div>
-</div>
-
-<div class="card">
-<h2>Deň výplaty a reálny zostatok</h2>
-<form method="post" action="/setup/balance">
-<label>Deň výplaty v mesiaci</label>
-<input name="payday_day" value="{{settings.get('payday_day','')}}" placeholder="napr. 15">
-<label>Reálny zostatok na účte teraz</label>
-<input name="real_balance" value="{{settings.get('real_balance', settings.get('account_balance', ''))}}" placeholder="napr. 850">
-<label>Rezerva bokom (voliteľné)</label>
-<input name="reserve_amount" value="{{settings.get('reserve_amount', settings.get('safe_min', 0))}}">
-<div class="small">Tento zostatok je od teraz zdroj pravdy pre nový cyklus — prepíše predchádzajúce odhady.</div>
-<div class="btn-row"><button>Uložiť</button></div>
-</form>
-</div>
-
-<div class="card">
-<h2>Pridať pravidelnú platbu</h2>
-<form method="post" action="/setup/recurring">
-<label>Názov</label><input name="name" placeholder="napr. škôlka">
-<label>Suma</label><input name="amount" placeholder="napr. 120">
-<label>Deň splatnosti v mesiaci</label><input name="due_day" placeholder="napr. 5">
-<label>Priorita</label>
-<select name="priority">
-<option value="mandatory">nevyhnutná</option>
-<option value="important">dôležitá</option>
-<option value="flexible">flexibilná</option>
-<option value="optional">voliteľná</option>
-</select>
-<label>Flexibilita</label>
-<select name="flexibility">
-<option value="hard_due">musí byť v termíne</option>
-<option value="can_defer">dá sa posunúť</option>
-<option value="optional">voliteľná</option>
-</select>
-<div class="btn-row"><button>Pridať platbu</button></div>
-</form>
-</div>
-
-<div class="card">
-<h2>Pravidelné platby</h2>
-<table><tr><th>Názov</th><th>Suma</th><th>Deň</th><th>Stav</th><th></th></tr>
-{% for x in recurring %}
-<tr>
-<td>{{x.get('name')}}</td><td>{{x.get('amount')}} €</td><td>{{x.get('due_day', x.get('day'))}}</td>
-<td>{% if x.get('active', True) %}<span class="badge ok">aktívna</span>{% else %}<span class="badge">zrušená</span>{% endif %}</td>
-<td class="actions">
-{% if x.get('id') %}
-<form method="post" action="/setup/recurring/toggle/{{x.get('id')}}"><button class="secondary">{% if x.get('active', True) %}Zrušiť{% else %}Obnoviť{% endif %}</button></form>
-{% endif %}
-</td>
-</tr>
-{% endfor %}
-</table>
-<div class="small">Pravidelné platby sa objavujú v prehľade každý mesiac automaticky, kým ich nezrušíš.</div>
-</div>
-
-<div class="card">
-<a href="/"><button type="button" class="secondary">Späť na prehľad</button></a>
-</div>
-
-</div>
-</body>
-</html>
-"""
+SETUP_TEMPLATE = "setup.html"
 
 @app.route("/setup")
 def setup_page():
     settings = load(SETTINGS, {"account_balance": 0, "use_reserve": False, "safe_min": 0})
     recurring = load(PAYMENTS, [])
-    return render_template_string(SETUP_HTML, settings=settings, recurring=recurring)
+    return render_template(SETUP_TEMPLATE, settings=settings, recurring=recurring)
 
 @app.post("/setup/balance")
 def setup_balance():

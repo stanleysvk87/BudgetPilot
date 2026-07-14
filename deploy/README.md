@@ -27,6 +27,31 @@ curl -s -o /dev/null -w '%{http_code}\n' http://localhost:8765/
 
 Then from any device on the same LAN: `http://<this-machine's-LAN-IP>:8765`.
 
+## Optional password protection
+
+Set `BUDGETPILOT_PASSWORD` to require HTTP Basic Auth for the whole web UI.
+For the user service, keep the password out of git by using a private
+systemd drop-in:
+
+```bash
+systemctl --user edit budgetpilot.service
+```
+
+Add:
+
+```ini
+[Service]
+Environment=BUDGETPILOT_USER=saldo
+Environment=BUDGETPILOT_PASSWORD=choose-a-long-password
+```
+
+Then reload:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user restart budgetpilot.service
+```
+
 ## Updating to a newer version
 
 ```bash

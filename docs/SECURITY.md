@@ -2,19 +2,52 @@
 
 ## Current assumptions
 
-BudgetPilot's web UI (`budgetpilot_web.py`) is built for **trusted LAN use
-only**:
+Saldo's web UI (`budgetpilot_web.py`) is built for **trusted LAN use only
+unless you explicitly enable a password**:
 
-- **No authentication.** Anyone who can reach the server's address can view
-  and edit all data — there is no login, no session, no access control.
+- **Password protection is optional.** Set `BUDGETPILOT_PASSWORD` to enable
+  HTTP Basic Auth for the whole web UI. The default username is `saldo`; set
+  `BUDGETPILOT_USER` to override it.
+- **Without `BUDGETPILOT_PASSWORD`, there is no authentication.** Anyone who
+  can reach the server's address can view and edit all data.
 - The server binds `0.0.0.0` on port `8765` specifically so it's reachable
   from other devices on your home network (e.g. your phone) — this is a
   feature, not an oversight, but it means it's also reachable by anything
   else on that network.
 - Do **not** port-forward this to the public internet or run it on a
-  network you don't fully trust. There is nothing standing between an
-  attacker on the network and full read/write access to your financial
-  data.
+  network you don't fully trust. Basic Auth is a useful household/LAN guard,
+  not a complete public-internet security model.
+
+## Enabling a password
+
+For an interactive shell:
+
+```bash
+export BUDGETPILOT_USER=saldo
+export BUDGETPILOT_PASSWORD='choose-a-long-password'
+python3 budgetpilot_web.py
+```
+
+For the user systemd service, create a private drop-in:
+
+```bash
+systemctl --user edit budgetpilot.service
+```
+
+Add:
+
+```ini
+[Service]
+Environment=BUDGETPILOT_USER=saldo
+Environment=BUDGETPILOT_PASSWORD=choose-a-long-password
+```
+
+Then run:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user restart budgetpilot.service
+```
 
 ## Remote access
 
@@ -39,10 +72,9 @@ rather than exposing the port directly:
 
 ## Future direction
 
-Authentication (even something simple like HTTP basic auth or a single
-shared password) should be added before this app is ever considered for
-exposure beyond a trusted LAN/VPN — see [ROADMAP.md](ROADMAP.md). It is not
-implemented today.
+HTTP Basic Auth exists for simple household protection, but public exposure
+would still need stronger hardening: HTTPS termination, CSRF protection,
+rate limiting, monitoring, and regular dependency maintenance.
 
 If you find a security issue, please open an issue describing it (avoid
 including real financial data in the report).

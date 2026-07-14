@@ -224,6 +224,10 @@ def _deferred_carryovers(payments: list, events: list, cycle: str) -> tuple:
 
 
 def _due_date_for_current_month(p: dict) -> str:
+    due_date = str(p.get("due_date") or "").strip()
+    if len(due_date) >= 10 and due_date[4] == "-" and due_date[7] == "-":
+        return due_date[:10]
+
     t = date.today()
     try:
         day = int(float(str(p.get("due_day", p.get("day", t.day))).strip()))
@@ -238,6 +242,7 @@ def _due_date_for_current_month(p: dict) -> str:
 def build_balance_first_summary() -> dict:
     settings = _read_json("settings.json", {})
     payments = _read_json("payments.json", [])
+    onetime = _read_json("onetime.json", [])
     events = _read_json("payment_events.json", [])
     envelopes = _read_json("envelopes.json", [])
     expenses = _read_json("expenses.json", [])
@@ -246,6 +251,8 @@ def build_balance_first_summary() -> dict:
         settings = {}
     if not isinstance(payments, list):
         payments = []
+    if not isinstance(onetime, list):
+        onetime = []
     if not isinstance(events, list):
         events = []
     if not isinstance(envelopes, list):
@@ -256,18 +263,25 @@ def build_balance_first_summary() -> dict:
     cycle = _cycle()
     today = date.today().isoformat()
     balance = _num(settings.get("account_balance", settings.get("real_balance", 0)), 0)
+    current_onetime = [
+        p for p in onetime
+        if isinstance(p, dict) and str(p.get("due_date") or "")[:7] == cycle
+    ]
+    payment_templates = payments + current_onetime
 
     event_by_pid = _events_by_payment_id(events, cycle)
 
     unpaid_total = 0.0
     mandatory_total = 0.0
     optional_total = 0.0
+    unsettled_paid_total = 0.0
     deferred_total = 0.0
     overdue_count = 0
     unpaid_items = []
+    unsettled_paid_items = []
     deferred_items = []
 
-    for p in payments:
+    for p in payment_templates:
         if not isinstance(p, dict):
             continue
         if p.get("active", True) is False:
@@ -283,6 +297,16 @@ def build_balance_first_summary() -> dict:
 
         due_date = _due_date_for_current_month(p)
         mandatory = _is_mandatory(p)
+
+        if state == "paid_me" and not bool(event and event.get("main_balance_adjusted")):
+            unsettled_paid_total += amount
+            unsettled_paid_items.append({
+                "id": pid,
+                "name": str(p.get("name") or "Platba"),
+                "amount": round(amount, 2),
+                "due_date": due_date,
+            })
+            continue
 
         if state in PAID_STATES:
             continue
@@ -314,7 +338,7 @@ def build_balance_first_summary() -> dict:
             "overdue": overdue,
         })
 
-    unpaid_carryovers, deferred_carryovers = _deferred_carryovers(payments, events, cycle)
+    unpaid_carryovers, deferred_carryovers = _deferred_carryovers(payments + onetime, events, cycle)
     for item in unpaid_carryovers:
         unpaid_total += item["amount"]
         if item["mandatory"]:
@@ -375,11 +399,13 @@ def build_balance_first_summary() -> dict:
         })
 
     # Balance-first: current balance is already real money after actual spending.
-    # Therefore the dashboard subtracts unpaid payments and the REMAINING envelope budget,
-    # not already-spent envelope money again.
-    after_mandatory = balance - mandatory_total
-    after_payments = balance - unpaid_total
-    after_all = balance - unpaid_total - envelope_remaining_total
+    # Hold back unpaid payments plus paid-from-account events that have not
+    # yet been reflected in the stored balance; then subtract only the
+    # REMAINING envelope budget, not already-spent envelope money again.
+    payment_holdback_total = unpaid_total + unsettled_paid_total
+    after_mandatory = balance - mandatory_total - unsettled_paid_total
+    after_payments = balance - payment_holdback_total
+    after_all = balance - payment_holdback_total - envelope_remaining_total
 
     # Dashboard-summary-only fields (docs/navigation_layout.md): counts and
     # top-N previews so the dashboard never needs the full unpaid/deferred
@@ -407,6 +433,8 @@ def build_balance_first_summary() -> dict:
         "unpaid_mandatory_total": round(mandatory_total, 2),
         "unpaid_optional_total": round(optional_total, 2),
         "unpaid_payment_count": len(unpaid_items),
+        "unsettled_paid_total": round(unsettled_paid_total, 2),
+        "unsettled_paid_count": len(unsettled_paid_items),
 
         "deferred_payments_total": round(deferred_total, 2),
         "deferred_payment_count": len(deferred_items),
@@ -425,6 +453,7 @@ def build_balance_first_summary() -> dict:
 
         "last_manual_review": settings.get("last_manual_review") or settings.get("setup_date") or "",
         "unpaid_payment_items": unpaid_items,
+        "unsettled_paid_items": unsettled_paid_items,
         "deferred_payment_items": deferred_items,
         "envelope_items": envelope_items,
 

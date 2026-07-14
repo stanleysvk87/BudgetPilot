@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="sk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Saldo — nastavenie</title>
+<style>
+:root{--bg:#0f172a;--card:#1f2937;--line:#374151;--text:#e5e7eb;--muted:#9ca3af;--blue:#2563eb;--red:#b91c1c;--green:#22c55e;--orange:#f59e0b}
+*{box-sizing:border-box}
+body{margin:0;background:linear-gradient(135deg,#0f172a,#111827);color:var(--text);font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:18px}
+.wrap{max-width:520px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+.card{background:rgba(31,41,55,.95);border:1px solid var(--line);border-radius:18px;padding:18px;box-shadow:0 12px 30px rgba(0,0,0,.25)}
+h1{font-size:26px;margin:0 0 6px} h2{font-size:19px;margin:0 0 12px}
+label{display:block;margin-top:8px;font-size:13px;color:var(--muted)}
+input,select{width:100%;padding:11px 12px;border-radius:12px;border:1px solid #4b5563;background:#0b1220;color:var(--text);margin-top:6px}
+button{padding:10px 14px;border:0;border-radius:12px;background:var(--blue);color:white;font-weight:700;cursor:pointer}
+.danger{background:var(--red)} .secondary{background:#4b5563}
+.btn-row{display:flex;gap:8px;margin-top:10px}.btn-row button{flex:1}
+.small{font-size:13px;color:var(--muted);line-height:1.35}
+table{width:100%;border-collapse:collapse} th,td{padding:9px 6px;border-bottom:1px solid var(--line);text-align:left;font-size:13px} th{color:var(--muted)}
+.actions{display:flex;gap:6px;justify-content:flex-end}.actions form{margin:0}
+.badge{display:inline-block;padding:4px 8px;border-radius:999px;font-size:12px;background:#374151}
+.badge.ok{background:#14532d}
+a{color:white;text-decoration:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<div class="card">
+<h1>Saldo</h1>
+<div class="small">Toto vyplníš raz na začiatku a potom vždy, keď príde výplata.</div>
+</div>
+
+<div class="card">
+<h2>Deň výplaty a reálny zostatok</h2>
+<form method="post" action="/setup/balance">
+<label>Deň výplaty v mesiaci</label>
+<input name="payday_day" value="{{settings.get('payday_day','')}}" placeholder="napr. 15">
+<label>Reálny zostatok na účte teraz</label>
+<input name="real_balance" value="{{settings.get('real_balance', settings.get('account_balance', ''))}}" placeholder="napr. 850">
+<label>Rezerva bokom (voliteľné)</label>
+<input name="reserve_amount" value="{{settings.get('reserve_amount', settings.get('safe_min', 0))}}">
+<div class="small">Tento zostatok je od teraz zdroj pravdy pre nový cyklus — prepíše predchádzajúce odhady.</div>
+<div class="btn-row"><button>Uložiť</button></div>
+</form>
+</div>
+
+<div class="card">
+<h2>Pridať pravidelnú platbu</h2>
+<form method="post" action="/setup/recurring">
+<label>Názov</label><input name="name" placeholder="napr. škôlka">
+<label>Suma</label><input name="amount" placeholder="napr. 120">
+<label>Deň splatnosti v mesiaci</label><input name="due_day" placeholder="napr. 5">
+<label>Priorita</label>
+<select name="priority">
+<option value="mandatory">nevyhnutná</option>
+<option value="important">dôležitá</option>
+<option value="flexible">flexibilná</option>
+<option value="optional">voliteľná</option>
+</select>
+<label>Flexibilita</label>
+<select name="flexibility">
+<option value="hard_due">musí byť v termíne</option>
+<option value="can_defer">dá sa posunúť</option>
+<option value="optional">voliteľná</option>
+</select>
+<div class="btn-row"><button>Pridať platbu</button></div>
+</form>
+</div>
+
+<div class="card">
+<h2>Pravidelné platby</h2>
+<table><tr><th>Názov</th><th>Suma</th><th>Deň</th><th>Stav</th><th></th></tr>
+{% for x in recurring %}
+<tr>
+<td>{{x.get('name')}}</td><td>{{x.get('amount')}} €</td><td>{{x.get('due_day', x.get('day'))}}</td>
+<td>{% if x.get('active', True) %}<span class="badge ok">aktívna</span>{% else %}<span class="badge">zrušená</span>{% endif %}</td>
+<td class="actions">
+{% if x.get('id') %}
+<form method="post" action="/setup/recurring/toggle/{{x.get('id')}}"><button class="secondary">{% if x.get('active', True) %}Zrušiť{% else %}Obnoviť{% endif %}</button></form>
+{% endif %}
+</td>
+</tr>
+{% endfor %}
+</table>
+<div class="small">Pravidelné platby sa objavujú v prehľade každý mesiac automaticky, kým ich nezrušíš.</div>
+</div>
+
+<div class="card">
+<a href="/"><button type="button" class="secondary">Späť na prehľad</button></a>
+</div>
+
+</div>
+</body>
+</html>

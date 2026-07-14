@@ -1,18 +1,32 @@
 __pycache__/
 *.pyc
+*.pyo
 
 # virtualenvs / local env files
 .venv/
 venv/
+env/
 .env
+.env.*
+
+# node (in case any tooling adds JS deps)
+node_modules/
 
 # local runtime data (may contain real household data)
 data/*.json
+data/*.json.bak
 data/receipts/
 !data/.gitkeep
 
 # local backups (may contain real household data once in real use)
 backups/
+*.bak
+*.backup
+
+# runtime databases
+*.db
+*.sqlite
+*.sqlite3
 
 # runtime logs
 *.log

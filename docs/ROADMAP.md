@@ -44,11 +44,12 @@ See "Later / exploratory" below for bigger, more open-ended ideas.
 - **Optional Docker packaging** — for easier install on other machines;
   not needed for the current single-Python-file deployment model.
 - **Possible public release** — this documentation pass is preparation for
-  that, not the release itself. No bank integration, AI, authentication, or
+  that, not the release itself. No bank integration, AI, public accounts, or
   cloud sync is planned before or after a public release.
 
 ## Explicitly out of scope
 
-No bank integration, no AI, no cloud sync, no authentication are planned as
-part of the near-term roadmap. If any of these are ever considered, they'd
-be a deliberate, separately-discussed decision — not a casual addition.
+No bank integration, no AI, no cloud sync, and no public account system are
+planned as part of the near-term roadmap. The web UI has optional Basic Auth
+via `BUDGETPILOT_PASSWORD`; anything beyond that would be a deliberate,
+separately-discussed decision — not a casual addition.

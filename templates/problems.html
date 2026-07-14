@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="sk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Saldo — problémy</title>
+<style>
+:root{--bg:#0b1020;--panel:#111827;--line:#334155;--text:#e5e7eb;--muted:#94a3b8;--red:#ef4444;--orange:#f59e0b;--green:#22c55e;--blue:#2563eb}
+*{box-sizing:border-box}
+body{margin:0;background:radial-gradient(circle at top left,#1e3a8a 0,#0f172a 34%,#020617 100%);color:var(--text);font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-variant-numeric:tabular-nums}
+main{max-width:1080px;margin:0 auto;padding:22px}
+a{color:white;text-decoration:none}
+.top{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;margin-bottom:16px}
+.eyebrow{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:850;margin-bottom:5px}
+h1{margin:0 0 6px;font-size:30px;line-height:1.1}
+.sub{color:#cbd5e1;font-size:14px;line-height:1.45;max-width:720px}
+.actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+.btn{display:inline-flex;align-items:center;justify-content:center;min-height:38px;padding:9px 12px;border-radius:11px;background:rgba(148,163,184,.14);border:1px solid rgba(148,163,184,.22);font-weight:850;font-size:13px}
+.btn.primary{background:var(--blue);border-color:rgba(147,197,253,.34)}
+.summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:14px}
+.metric{background:rgba(15,23,42,.76);border:1px solid rgba(148,163,184,.16);border-radius:14px;padding:13px}
+.metric-label{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-weight:850}
+.metric-value{font-size:22px;font-weight:930;margin-top:5px}
+.list{display:flex;flex-direction:column;gap:10px}
+.problem{background:rgba(17,24,39,.92);border:1px solid rgba(148,163,184,.18);border-left:5px solid rgba(148,163,184,.55);border-radius:15px;padding:15px}
+.problem.critical{border-left-color:var(--red);background:rgba(127,29,29,.20)}
+.problem.warning{border-left-color:var(--orange);background:rgba(120,53,15,.16)}
+.problem.info{border-left-color:#38bdf8}
+.problem.ok{border-left-color:var(--green);background:rgba(20,83,45,.16)}
+.head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px}
+.title{font-size:17px;font-weight:920}
+.badge{font-size:11px;text-transform:uppercase;letter-spacing:.05em;font-weight:900;border-radius:999px;padding:4px 8px;background:rgba(148,163,184,.16);color:#e2e8f0}
+.critical .badge{background:rgba(239,68,68,.22);color:#fecaca}.warning .badge{background:rgba(245,158,11,.20);color:#fed7aa}.ok .badge{background:rgba(34,197,94,.18);color:#bbf7d0}
+.grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+.field{border:1px solid rgba(148,163,184,.13);background:rgba(2,6,23,.28);border-radius:12px;padding:10px}
+.field-label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:850;margin-bottom:5px}
+.field-text{font-size:13px;line-height:1.42;color:#e2e8f0}
+.details{margin-top:10px;color:#cbd5e1;font-size:13px}
+.details ul{margin:6px 0 0;padding-left:18px}
+.problem-action{margin-top:12px}
+@media(max-width:760px){main{padding:14px}.top{flex-direction:column}.actions{width:100%;display:grid;grid-template-columns:1fr 1fr}.summary,.grid{grid-template-columns:1fr}h1{font-size:25px}}
+</style>
+</head>
+<body>
+<main>
+<div class="top">
+<div>
+<div class="eyebrow">Saldo · diagnostika</div>
+<h1>Problémy a návrhy riešení</h1>
+<div class="sub">Konkrétne veci, ktoré môžu skresľovať zostatok alebo vyžadujú tvoje rozhodnutie.</div>
+</div>
+<div class="actions">
+<a class="btn" href="/">Prehľad</a>
+<a class="btn primary" href="/payments">Platby</a>
+</div>
+</div>
+
+<section class="summary">
+<div class="metric"><div class="metric-label">Reálne k dispozícii</div><div class="metric-value">{{eur(summary.estimated_after_payments_and_envelopes)}}</div></div>
+<div class="metric"><div class="metric-label">Nezaplatené</div><div class="metric-value">{{eur(summary.unpaid_payments_total)}}</div></div>
+<div class="metric"><div class="metric-label">Problémy</div><div class="metric-value">{{problems|rejectattr("severity", "equalto", "ok")|list|length}}</div></div>
+</section>
+
+<section class="list">
+{% for p in problems %}
+<article class="problem {{p.severity}}">
+<div class="head">
+<div class="title">{{p.title}}</div>
+<div class="badge">{{p.severity}}</div>
+</div>
+<div class="grid">
+<div class="field"><div class="field-label">Problém</div><div class="field-text">{{p.problem}}</div></div>
+<div class="field"><div class="field-label">Dopad</div><div class="field-text">{{p.impact}}</div></div>
+<div class="field"><div class="field-label">Návrh riešenia</div><div class="field-text">{{p.suggestion}}</div></div>
+</div>
+{% if p.details %}
+<div class="details">
+<strong>Konkrétne položky:</strong>
+<ul>{% for d in p.details %}<li>{{d}}</li>{% endfor %}</ul>
+</div>
+{% endif %}
+{% if p.action_href and p.action_label %}
+<div class="problem-action"><a class="btn primary" href="{{p.action_href}}">{{p.action_label}}</a></div>
+{% endif %}
+</article>
+{% endfor %}
+</section>
+</main>
+</body>
+</html>

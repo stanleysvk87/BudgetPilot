@@ -107,6 +107,50 @@ class FullResetTests(unittest.TestCase):
         with mock.patch.object(wiz, "DATA", self.data):
             self.assertTrue(wiz._needs_first_run())
 
+    def test_restore_requires_confirmation_code(self):
+        backup = self.base / "backups" / "20260711-120000-full-reset" / "data"
+        backup.mkdir(parents=True)
+        (backup / "settings.json").write_text(json.dumps({"account_balance": 777.0}))
+        (backup / "payments.json").write_text(json.dumps([]))
+
+        response = self.client.post("/settings/restore", data={
+            "backup_name": "20260711-120000-full-reset",
+            "confirm_code": "nope",
+        })
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("restore_error=code", response.headers["Location"])
+        self.assertEqual(json.loads(self.settings_path.read_text())["account_balance"], 555.0)
+
+    def test_restore_backup_preserves_current_data_in_pre_restore_backup(self):
+        backup = self.base / "backups" / "20260711-120000-full-reset" / "data"
+        backup_receipts = backup / "receipts"
+        backup_receipts.mkdir(parents=True)
+        (backup / "settings.json").write_text(json.dumps({"account_balance": 777.0, "real_balance": 777.0}))
+        (backup / "payments.json").write_text(json.dumps([{"id": "p2", "name": "Internet", "amount": 20.0}]))
+        (backup / "audit_log.json").write_text(json.dumps([]))
+        (backup_receipts / "restored.jpg").write_bytes(b"restored-photo")
+
+        response = self.client.post("/settings/restore", data={
+            "backup_name": "20260711-120000-full-reset",
+            "confirm_code": web.RESET_CONFIRM_CODE,
+        })
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("restored=20260711-120000-full-reset", response.headers["Location"])
+        self.assertEqual(json.loads(self.settings_path.read_text())["account_balance"], 777.0)
+        self.assertEqual(json.loads(self.payments_path.read_text())[0]["id"], "p2")
+        self.assertTrue((self.receipts_dir / "restored.jpg").exists())
+
+        pre_restore_backups = list((self.base / "backups").glob("*-pre-restore*"))
+        self.assertEqual(len(pre_restore_backups), 1)
+        preserved_settings = json.loads((pre_restore_backups[0] / "data" / "settings.json").read_text())
+        self.assertEqual(preserved_settings["account_balance"], 555.0)
+
+        entries = audit_log.load_audit_log(self.audit_path)
+        self.assertEqual(entries[-1]["action"], "backup_restored")
+        self.assertIn("20260711-120000-full-reset", entries[-1]["detail"])
+
 
 class WizardFrequencyTests(unittest.TestCase):
     def setUp(self):

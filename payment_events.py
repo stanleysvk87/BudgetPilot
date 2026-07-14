@@ -107,6 +107,9 @@ def apply_payment_events(payments, events, cycle_key):
             item.pop("deferred_to", None)
         if event and event.get("note"):
             item["note"] = event["note"]
+        if event and event.get("main_balance_adjusted"):
+            item["main_balance_adjusted"] = True
+            item["main_balance_delta"] = event.get("main_balance_delta")
         resolved.append(item)
     return resolved
 
