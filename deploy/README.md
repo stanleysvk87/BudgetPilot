@@ -1,70 +1,67 @@
-# Deploying as a persistent service (no root required)
+# Deploying as a persistent service
 
-This runs BudgetPilot as a **user-level** systemd service, so it doesn't
-need `sudo` for the service itself (installing the `tesseract-ocr` system
-package for OCR still does — see [../docs/receipt_ocr.md](../docs/receipt_ocr.md)).
+This is an optional native Linux deployment path. Docker Compose is the
+preferred public deployment method because it avoids distribution-specific
+Python/package differences.
 
 ```bash
-cd ~/BudgetPilot
+sudo useradd --system --home /var/lib/budgetpilot --create-home --shell /usr/sbin/nologin budgetpilot
+sudo mkdir -p /opt/budgetpilot /etc/budgetpilot /var/lib/budgetpilot
+sudo chown -R "$USER":"$USER" /opt/budgetpilot
+sudo chown -R budgetpilot:budgetpilot /var/lib/budgetpilot
+
+cd /opt/budgetpilot
+git clone https://github.com/stanleysvk87/BudgetPilot.git .
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 
-mkdir -p ~/.config/systemd/user
-cp deploy/budgetpilot.service ~/.config/systemd/user/
-systemctl --user daemon-reload
-systemctl --user enable --now budgetpilot.service
-
-# Let it keep running after you log out / SSH disconnects:
-loginctl enable-linger "$USER"
+sudo cp .env.example /etc/budgetpilot/budgetpilot.env
+sudo cp deploy/budgetpilot.service /etc/systemd/system/budgetpilot.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now budgetpilot.service
 ```
 
 Check it's up:
 
 ```bash
-systemctl --user status budgetpilot.service
+systemctl status budgetpilot.service
 curl -s -o /dev/null -w '%{http_code}\n' http://localhost:8765/
 ```
 
-Then from any device on the same LAN: `http://<this-machine's-LAN-IP>:8765`.
+Then open `http://localhost:8765` and create the first local administrator.
+For LAN access, change `BUDGETPILOT_HOST` and firewall rules deliberately,
+and keep access limited to a trusted network or VPN.
 
 ## Optional password protection
 
-Set `BUDGETPILOT_PASSWORD` to require HTTP Basic Auth for the whole web UI.
-For the user service, keep the password out of git by using a private
-systemd drop-in:
+New installations should use the first-run local administrator account. If
+you also need Basic Auth compatibility, keep values in
+`/etc/budgetpilot/budgetpilot.env`, not in git:
 
 ```bash
-systemctl --user edit budgetpilot.service
-```
-
-Add:
-
-```ini
-[Service]
-Environment=BUDGETPILOT_USER=saldo
-Environment=BUDGETPILOT_PASSWORD=choose-a-long-password
+BUDGETPILOT_USER=saldo
+BUDGETPILOT_PASSWORD=choose-a-long-password
 ```
 
 Then reload:
 
 ```bash
-systemctl --user daemon-reload
-systemctl --user restart budgetpilot.service
+sudo systemctl restart budgetpilot.service
 ```
 
 ## Updating to a newer version
 
 ```bash
-cd ~/BudgetPilot
+cd /opt/budgetpilot
 git pull
 .venv/bin/pip install -r requirements.txt   # in case dependencies changed
-systemctl --user restart budgetpilot.service
+sudo systemctl restart budgetpilot.service
 ```
 
 ## Logs
 
 ```bash
-journalctl --user -u budgetpilot.service -f
+journalctl -u budgetpilot.service -f
 ```
 
 ## OCR (optional)
@@ -74,5 +71,5 @@ extract anything, you fill it in by hand on the review screen.
 
 ```bash
 sudo apt install tesseract-ocr tesseract-ocr-slk
-systemctl --user restart budgetpilot.service
+sudo systemctl restart budgetpilot.service
 ```

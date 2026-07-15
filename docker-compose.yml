@@ -1,0 +1,21 @@
+services:
+  budgetpilot:
+    build: .
+    restart: unless-stopped
+    environment:
+      BUDGETPILOT_HOME: /var/lib/budgetpilot
+      BUDGETPILOT_HOST: 0.0.0.0
+      BUDGETPILOT_PORT: 8765
+      BUDGETPILOT_USER: ${BUDGETPILOT_USER:-saldo}
+      BUDGETPILOT_PASSWORD: ${BUDGETPILOT_PASSWORD:-}
+      BUDGETPILOT_WORKERS: ${BUDGETPILOT_WORKERS:-2}
+      BUDGETPILOT_COOKIE_SECURE: ${BUDGETPILOT_COOKIE_SECURE:-false}
+      BUDGETPILOT_PROXY_FIX: ${BUDGETPILOT_PROXY_FIX:-false}
+      BUDGETPILOT_PUBLIC_URL: ${BUDGETPILOT_PUBLIC_URL:-}
+    ports:
+      - "${BUDGETPILOT_BIND:-127.0.0.1}:${BUDGETPILOT_HOST_PORT:-8765}:8765"
+    volumes:
+      - budgetpilot-data:/var/lib/budgetpilot
+
+volumes:
+  budgetpilot-data:
