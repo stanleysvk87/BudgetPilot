@@ -8,15 +8,28 @@ venv/
 env/
 .env
 .env.*
+!.env.example
 
 # node (in case any tooling adds JS deps)
 node_modules/
+
+# Python/tool caches and reports
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
 
 # local runtime data (may contain real household data)
 data/*.json
 data/*.json.bak
 data/receipts/
 !data/.gitkeep
+
+# Flask session-signing secret (generated on first run, see
+# budgetpilot_web._load_or_create_secret_key) -- must never be committed
+data/.session_secret_key
 
 # local backups (may contain real household data once in real use)
 backups/
@@ -30,6 +43,21 @@ backups/
 
 # runtime logs
 *.log
+
+# build / distribution output
+build/
+dist/
+*.egg-info/
+
+# generated local review artifacts and screenshots
+screenshots/
+!docs/assets/
+!docs/assets/**
+!docs/assets/screenshots/
+!docs/assets/screenshots/**
+playwright-report/
+test-results/
+.tmp/
 
 # OS / editor files
 .DS_Store
