@@ -1,0 +1,16 @@
+{
+  "name": "budgetpilot",
+  "version": "0.1.0",
+  "description": "Privacy-focused, self-hosted household forward-cashflow app.",
+  "private": true,
+  "license": "Apache-2.0",
+  "scripts": {
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "playwright test --headed",
+    "screenshots:public": "node scripts/capture_public_screenshots.js",
+    "review:chromium": "node scripts/chromium_visual_review.js"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.54.0"
+  }
+}
