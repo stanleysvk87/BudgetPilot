@@ -49,9 +49,6 @@ async function main() {
     const browser = await chromium.launch();
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
 
-    await page.goto(`${BASE_URL}/login`);
-    await page.screenshot({ path: path.join(OUT, "login-page.png"), fullPage: true });
-
     await page.goto(`${BASE_URL}/auth/setup`);
     await page.screenshot({ path: path.join(OUT, "first-run-admin-setup.png"), fullPage: true });
     await page.locator('input[name="username"]').fill(USER);
@@ -70,6 +67,14 @@ async function main() {
     await page.locator('input[name="pay_amount_2"]').fill("120");
     await page.locator('input[name="pay_day_2"]').fill("20");
     await page.locator('form').last().locator('button[type="submit"]').click();
+    await page.waitForURL(/\/($|\?)/);
+
+    await page.goto(`${BASE_URL}/logout`);
+    await page.waitForURL(/\/login/);
+    await page.screenshot({ path: path.join(OUT, "login-page.png"), fullPage: true });
+    await page.locator('input[name="username"]').fill(USER);
+    await page.locator('input[name="password"]').fill(PASSWORD);
+    await page.locator('button[type="submit"]').click();
     await page.waitForURL(/\/($|\?)/);
 
     await page.goto(`${BASE_URL}/language/sk?next=/`);
