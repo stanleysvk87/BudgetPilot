@@ -17,9 +17,11 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # for csrf_test_support
 
 import budgetpilot_web as web
 import envelope_editor
+import csrf_test_support
 
 
 class EnvelopeEditorTestCase(unittest.TestCase):
@@ -32,16 +34,31 @@ class EnvelopeEditorTestCase(unittest.TestCase):
             {"id": "e1", "name": "Strava", "category": "Strava", "monthly_limit": 400.0, "active": True},
             {"id": "e2", "name": "Zábava", "category": "Zábava", "monthly_limit": 50.0, "active": False},
         ]))
+        # first_run_wizard's before_request gate runs on every route (not
+        # just "/") and reads web.SETTINGS/web.PAYMENTS -- unpatched, it
+        # falls back to the real production data dir. See
+        # tests/test_production_data_guard.py.
+        settings_path = data / "settings.json"
+        settings_path.write_text(json.dumps({"account_balance": 1000.0, "real_balance": 1000.0}))
+        payments_path = data / "payments.json"
+        payments_path.write_text(json.dumps([{"id": "p1", "name": "Elektrina", "amount": 80.0, "day": 5}]))
 
         patches = [
             mock.patch.object(envelope_editor, "ENVELOPES", self.envelopes_path),
             mock.patch.object(envelope_editor, "AUDIT_LOG_PATH", data / "audit_log.json"),
+            mock.patch.object(web, "SETTINGS", settings_path),
+            mock.patch.object(web, "PAYMENTS", payments_path),
         ]
         for p in patches:
             p.start()
             self.addCleanup(p.stop)
 
         web.app.config["TESTING"] = True
+        previous_auth_bypass = web.app.config.get("BUDGETPILOT_AUTH_BYPASS")
+        web.app.config["BUDGETPILOT_AUTH_BYPASS"] = True
+        self.addCleanup(web.app.config.__setitem__, "BUDGETPILOT_AUTH_BYPASS", previous_auth_bypass)
+        previous_client_class = csrf_test_support.install(web.app)
+        self.addCleanup(setattr, web.app, "test_client_class", previous_client_class)
         self.client = web.app.test_client()
 
     def _raw_envelopes_on_disk(self):

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import sys
+import os
 from datetime import date
 import calendar
 
@@ -8,6 +9,7 @@ from obligations import month_key, debt_to_payment, generate_onetime_for_month, 
 from payment_events import load_payment_events, apply_payment_events
 from paths import app_base, data_dir
 import json_store
+from i18n import DEFAULT_LANGUAGE, normalize_language, translate
 
 BASE = app_base()
 DATA = data_dir()
@@ -20,6 +22,11 @@ ONETIME = DATA / "onetime.json"
 
 TODAY = date.today()
 SAFE_MIN = None
+
+CLI_LANGUAGE = normalize_language(os.environ.get("BUDGETPILOT_LANG", DEFAULT_LANGUAGE))
+
+def t(text):
+    return translate(text, CLI_LANGUAGE)
 
 def load(path, default):
     if not path.exists():
@@ -195,57 +202,57 @@ def print_month(r):
     name = calendar.month_name[r["month"]]
     print()
     print(f"===== {name.upper()} {r['year']} =====")
-    print(f"Dnes:                   {TODAY}")
+    print(f"{t('Dnes:'):<24}{TODAY}")
     print()
-    print(f"Suma na účte teraz:     {r['account_balance']:.2f} €")
+    print(f"{t('Suma na účte teraz:'):<24}{r['account_balance']:.2f} €")
     if r["use_reserve"]:
-        print(f"Rezerva bokom:          {r['safe_min']:.2f} €")
-        print("Poznámka: rezerva sa neráta ako použiteľné peniaze.")
+        print(f"{t('Rezerva bokom:'):<24}{r['safe_min']:.2f} €")
+        print(t("Poznámka: rezerva sa neráta ako použiteľné peniaze."))
     else:
-        print("Rezerva:                vypnutá")
+        print(f"{t('Rezerva:'):<24}{t('vypnutá')}")
     print()
-    print(f"Plánovaný príjem:       {r['income_total']:.2f} €")
-    print(f"Plánované platby:       {r['payment_total']:.2f} €")
-    print(f"Plán mesiaca:           {r['planned_month_balance']:.2f} €")
+    print(f"{t('Plánovaný príjem:'):<24}{r['income_total']:.2f} €")
+    print(f"{t('Plánované platby:'):<24}{r['payment_total']:.2f} €")
+    print(f"{t('Plán mesiaca:'):<24}{r['planned_month_balance']:.2f} €")
     print()
-    print(f"Ešte príde príjem:      {r['future_income']:.2f} €")
-    print(f"Nezaplatené do výplaty: {r['unpaid_required_before_payday']:.2f} €")
-    print(f"Bezpečne minúť teraz:   {r['safe_to_spend_now']:.2f} €")
+    print(f"{t('Ešte príde príjem:'):<24}{r['future_income']:.2f} €")
+    print(f"{t('Nezaplatené do výplaty:'):<24}{r['unpaid_required_before_payday']:.2f} €")
+    print(f"{t('Bezpečne minúť teraz:'):<24}{r['safe_to_spend_now']:.2f} €")
     if r["shortfall_before_payday"] < 0:
-        print(f"Chýba do výplaty:       {r['shortfall_before_payday']:.2f} €")
-    print(f"Odhad po najbližšej výplate: {r['projected_after_payday']:.2f} €")
-    print(f"Stav:                   {r['status']}")
+        print(f"{t('Chýba do výplaty:'):<24}{r['shortfall_before_payday']:.2f} €")
+    print(f"{t('Odhad po najbližšej výplate:'):<32}{r['projected_after_payday']:.2f} €")
+    print(f"{t('Stav:'):<24}{t(r['status'])}")
 
     if r["days_to_income"] is not None:
-        print(f"Do ďalšej výplaty:      {r['days_to_income']} dní")
+        print(f"{t('Do ďalšej výplaty:'):<24}{r['days_to_income']} {t('dní')}")
     if r["daily_limit"] is not None:
-        print(f"Na deň:                 {r['daily_limit']:.2f} €")
+        print(f"{t('Na deň:'):<24}{r['daily_limit']:.2f} €")
     if r.get("next_income_date"):
-        print(f"Ďalšia výplata:         {r['next_income_date']}")
+        print(f"{t('Ďalšia výplata:'):<24}{r['next_income_date']}")
 
     print()
-    print("Príjmy tento mesiac:")
+    print(t("Príjmy tento mesiac:"))
     for i in sorted(r["incomes"], key=lambda x: x.get("day", 1)):
         d = due_date(i, r["year"], r["month"])
-        stav = "ešte príde" if d > TODAY else "už v účte / pred dneškom"
-        print(f"- {i['name']}: {float(i['amount']):.2f} € | deň {i.get('day')} | {stav}")
+        stav = t("ešte príde") if d > TODAY else t("už v účte / pred dneškom")
+        print(f"- {i['name']}: {float(i['amount']):.2f} € | {t('deň')} {i.get('day')} | {stav}")
 
     print()
-    print("Platby tento mesiac:")
+    print(t("Platby tento mesiac:"))
     for p in sorted(r["payments"], key=lambda x: x.get("day", 1)):
         d = due_date(p, r["year"], r["month"])
-        stav = "ešte príde" if d >= TODAY else "pred dneškom"
-        print(f"- {p['name']}: {float(p['amount']):.2f} € | deň {p.get('day')} | {p.get('frequency')} | {stav}")
+        stav = t("ešte príde") if d >= TODAY else t("pred dneškom")
+        print(f"- {p['name']}: {float(p['amount']):.2f} € | {t('deň')} {p.get('day')} | {t(p.get('frequency'))} | {stav}")
 
 def simulate(months=18):
     y, m = TODAY.year, TODAY.month
     print()
-    print("===== SIMULÁCIA PLÁNU =====")
+    print(t("===== SIMULÁCIA PLÁNU ====="))
     for _ in range(months):
         r = calc_month(y, m)
         print(
-            f"{y}-{m:02d} | príjem {r['income_total']:.0f} € | "
-            f"platby {r['payment_total']:.0f} € | plán {r['planned_month_balance']:.0f} € | {r['status']}"
+            f"{y}-{m:02d} | {t('príjem')} {r['income_total']:.0f} € | "
+            f"{t('platby')} {r['payment_total']:.0f} € | {t('plán')} {r['planned_month_balance']:.0f} € | {t(r['status'])}"
         )
         y, m = next_month(y, m)
 
@@ -259,16 +266,16 @@ def can_spend(amount):
         per_day = max(after, 0) / r["days_to_income"]
 
     print()
-    print("===== TEST VÝDAVKU =====")
-    print(f"Chceš minúť:            {amount:.2f} €")
-    print(f"Bezpečne minúť teraz:   {usable_before:.2f} €")
-    print(f"Voľné po výdavku:       {after:.2f} €")
+    print(t("===== TEST VÝDAVKU ====="))
+    print(f"{t('Chceš minúť:'):<24}{amount:.2f} €")
+    print(f"{t('Bezpečne minúť teraz:'):<24}{usable_before:.2f} €")
+    print(f"{t('Voľné po výdavku:'):<24}{after:.2f} €")
 
     if r["days_to_income"] and r["days_to_income"] > 0:
-        print(f"Do výplaty:             {r['days_to_income']} dní")
-        print(f"Na deň po výdavku:      {per_day:.2f} €")
+        print(f"{t('Do výplaty:'):<24}{r['days_to_income']} {t('dní')}")
+        print(f"{t('Na deň po výdavku:'):<24}{per_day:.2f} €")
 
-    print(f"Verdikt:                {verdict_text(after, per_day)}")
+    print(f"{t('Verdikt:'):<24}{t(verdict_text(after, per_day))}")
 
 def main():
     DATA.mkdir(parents=True, exist_ok=True)
@@ -276,7 +283,7 @@ def main():
     if len(sys.argv) > 1:
         if sys.argv[1] == "spend":
             if len(sys.argv) < 3:
-                print("Použitie: ./budgetpilot.py spend 45")
+                print(t("Použitie: ./budgetpilot.py spend 45"))
                 return
             can_spend(float(sys.argv[2]))
             return

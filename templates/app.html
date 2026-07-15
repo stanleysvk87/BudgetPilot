@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Saldo</title>
+<title>BudgetPilot</title>
 <style>
 :root{--bg:#0b1020;--card:#1f2937;--panel:#111827;--line:#374151;--text:#e5e7eb;--muted:#9ca3af;--blue:#2563eb;--red:#b91c1c;--green:#22c55e;--orange:#f59e0b;--teal:#0d9488;--purple:#7c3aed}
 *{box-sizing:border-box}
@@ -66,6 +66,12 @@ a{color:white;text-decoration:none}
 .topnav a,.topnav .navlink{color:var(--text);text-decoration:none;padding:8px 10px;border-radius:10px;font-size:14px}
 .topnav a:hover{background:var(--line)}
 .topnav .navlink.disabled{color:var(--muted);cursor:default}
+.topnav form{margin:4px 0 0}
+.topnav button.logout-button{width:100%;text-align:left;background:rgba(148,163,184,.10);border:1px solid rgba(148,163,184,.18);color:#e2e8f0;border-radius:14px;padding:12px 14px;font-size:14px;font-weight:750}
+.language-switch{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:2px 0 8px}
+.language-switch a{display:flex!important;justify-content:center;padding:8px 9px!important;border-radius:999px!important;
+font-size:12px!important;font-weight:900!important;border:1px solid rgba(148,163,184,.24)!important;background:rgba(148,163,184,.10)!important}
+.language-switch a.active{background:#2563eb!important;border-color:rgba(147,197,253,.55)!important;color:white!important}
 .summarygrid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:14px}
 .summarygrid .metric .value{font-size:26px}
 .section{margin-bottom:14px}
@@ -110,7 +116,7 @@ body{background:radial-gradient(circle at top left,#1e3a8a 0,#0f172a 34%,#020617
 .topnav a:hover{background:rgba(37,99,235,.18);border-color:rgba(96,165,250,.25)}
 .topnav a.active{background:rgba(37,99,235,.32);border-color:rgba(96,165,250,.4);font-weight:800}
 .bottomnav{display:none}
-.app{margin-left:250px;padding:20px;display:flex;flex-direction:column;gap:16px}
+.app{margin-left:250px;width:auto;max-width:calc(100vw - 250px);padding:20px;display:flex;flex-direction:column;gap:16px}
 .app:not(.app-dashboard){
   display:grid;
   grid-template-columns:minmax(0,1fr) 360px;
@@ -211,14 +217,19 @@ body{background:radial-gradient(circle at top left,#1e3a8a 0,#0f172a 34%,#020617
   .summarygrid{grid-template-columns:repeat(2,minmax(0,1fr))}
   .sidebar{grid-template-columns:1fr}
 }
+@media(max-width:900px){
+  .screen-header{flex-direction:column;gap:11px}
+  .screen-actions{width:100%;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));justify-content:stretch}
+  .screen-action{min-height:42px}
+}
 @media(max-width:760px){
   body{padding-top:58px}
   .menu-toggle{display:block}
   .drawer-overlay.open{display:block;position:fixed;inset:0;background:rgba(2,6,23,.58);z-index:45}
   .topnav{transform:translateX(-105%);transition:transform .18s ease;width:min(82vw,310px)}
   .topnav.open{transform:translateX(0)}
-  .topnav .brand{padding-left:48px}
-  .app{margin-left:0;padding:10px}
+  .topnav .brand{padding:10px 12px 10px 56px!important}
+  .app{margin-left:0;width:auto;max-width:none;padding:10px}
   .app:not(.app-dashboard){display:flex;flex-direction:column}
   .app-dashboard .sidebar{display:none}
   .screen-header{flex-direction:column;gap:11px;padding:0 2px 2px}
@@ -439,6 +450,15 @@ button.tiny.defer-quick{padding:6px 9px;font-size:11px;border-radius:999px;backg
 .summary-card-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:10px}
 .summary-card-head h2{margin-bottom:0}
 .summary-card-link{font-size:12px;color:#93c5fd;font-weight:700;white-space:nowrap}
+.summary-card-link,.health-action,.task-card-more summary,.real-balance-toggle summary,details.card>summary{
+  min-height:36px;
+  min-width:32px;
+  display:inline-flex;
+  align-items:center;
+}
+.health-action{padding:8px 0}
+a:has(> button){display:inline-flex;min-height:36px;align-items:center}
+label input[type="checkbox"]{width:32px!important;height:32px!important;vertical-align:middle}
 .summary-card .btn-row,.summary-card>a{margin-top:12px;display:block}
 .summary-card>a button{width:100%}
 .summary-stats{display:flex;flex-wrap:wrap;gap:14px;margin-bottom:6px}
@@ -746,6 +766,7 @@ body{font-variant-numeric:tabular-nums}
 <body>
 {% macro paid_button(payment_id, cycle_key) %}
 <form method="post" action="/payment/state/by-id" class="paid-quick-form">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 <input type="hidden" name="payment_id" value="{{payment_id}}">
 <input type="hidden" name="cycle_key" value="{{cycle_key}}">
 <input type="hidden" name="state" value="paid_me">
@@ -770,6 +791,7 @@ body{font-variant-numeric:tabular-nums}
 {% endmacro %}
 {% macro state_form(payment_id, cycle_key, states, labels) %}
 <form method="post" action="/payment/state/by-id">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 <input type="hidden" name="payment_id" value="{{payment_id}}">
 <input type="hidden" name="cycle_key" value="{{cycle_key}}">
 <select name="state">{% for s in states %}<option value="{{s}}">{{labels.get(s,s)}}</option>{% endfor %}</select>
@@ -780,6 +802,7 @@ body{font-variant-numeric:tabular-nums}
 <div class="defer-widget">
 <button type="button" class="secondary defer-toggle">{{btn_label}}</button>
 <form method="post" action="/payment/defer/by-id" class="defer-form" hidden>
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 <input type="hidden" name="payment_id" value="{{payment_id}}">
 <input type="hidden" name="cycle_key" value="{{cycle_key}}">
 <label>Odložiť do dátumu</label>
@@ -883,15 +906,23 @@ window.BP_ACTIVE_VIEW = "{{active_view}}";
 window.BP_EDIT_TARGET = "{% if edit_payment is not none %}edit-form-payment{% elif edit_income is not none %}edit-form-income{% elif edit_expense is not none %}edit-form-expense{% endif %}";
 </script>
 <nav class="topnav" id="appDrawer">
-<span class="brand" aria-label="Saldo">
+<span class="brand" aria-label="BudgetPilot">
 <span class="brand-logo" aria-hidden="true"><svg viewBox="0 0 40 40" focusable="false"><rect x="6" y="6" width="28" height="28" rx="9" fill="rgba(255,255,255,.10)" stroke="rgba(255,255,255,.45)" stroke-width="1.5"/><path d="M12 25l6-6 5 4 6-10" fill="none" stroke="#ffffff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/><path d="M13 30h14" fill="none" stroke="#a7f3d0" stroke-width="2.5" stroke-linecap="round"/></svg></span>
-<span class="brand-name">Saldo</span>
+<span class="brand-name">BudgetPilot</span>
 </span>
+<div class="language-switch" aria-label="Language">
+<a href="/language/sk?next={{request.full_path|urlencode}}" class="{% if current_language() == 'sk' %}active{% endif %}">SK</a>
+<a href="/language/en?next={{request.full_path|urlencode}}" class="{% if current_language() == 'en' %}active{% endif %}">EN</a>
+</div>
 <a href="/" class="{% if active_view=='dashboard' %}active{% endif %}"><span class="nav-icon">⌂</span><span>Prehľad</span></a>
 <a href="/payments" class="{% if active_view=='payments' %}active{% endif %}"><span class="nav-icon">✓</span><span>Platby</span></a>
 <a href="/expenses" class="{% if active_view in ('expenses','receipts') %}active{% endif %}"><span class="nav-icon">＋</span><span>Výdavky</span></a>
 <a href="/envelopes" class="{% if active_view=='envelopes' %}active{% endif %}"><span class="nav-icon">□</span><span>Obálky</span></a>
 <a href="/manage" class="{% if active_view in ('manage','settings','history') %}active{% endif %}"><span class="nav-icon">⚙</span><span>Správa</span></a>
+<form method="post" action="/logout">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+<button class="logout-button" type="submit"><span class="nav-icon">↩</span><span>Odhlásiť</span></button>
+</form>
 </nav>
 <nav class="bottomnav">
 <a href="/expenses#expense-quick" class="{% if active_view=='expenses' %}active{% endif %}"><span class="bn-icon">+</span>Výdavok</a>
@@ -902,7 +933,7 @@ window.BP_EDIT_TARGET = "{% if edit_payment is not none %}edit-form-payment{% el
 
 <aside class="sidebar">
 <div class="card">
-<h1>Saldo</h1>
+<h1>BudgetPilot</h1>
 <div class="small">Pokojný prehľad toho, čo treba zaplatiť a čo ostáva na bežné míňanie.</div>
 </div>
 {% if active_view in ('manage','expenses','receipts','envelopes') %}<div class="rail-title">Akcie a formuláre</div>{% endif %}
@@ -919,6 +950,7 @@ window.BP_EDIT_TARGET = "{% if edit_payment is not none %}edit-form-payment{% el
 <div class="card" id="account-settings">
 <h2>Účet + rezerva</h2>
 <form method="post" action="/settings">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 <label>Suma na účte teraz</label>
 <input name="account_balance" value="{{settings.get('account_balance',0)}}">
 <label><input type="checkbox" name="use_reserve" {% if settings.get('use_reserve') %}checked{% endif %} style="width:auto"> Mám reálnu rezervu bokom</label>
@@ -932,6 +964,7 @@ window.BP_EDIT_TARGET = "{% if edit_payment is not none %}edit-form-payment{% el
 <div class="card" id="edit-form-income">
 <h2>{% if edit_income is not none %}Upraviť príjem{% else %}Príjem{% endif %}</h2>
 <form method="post" action="{% if edit_income is not none %}/income/update/{{edit_income}}{% else %}/income/add{% endif %}">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 <label>Názov</label><input name="name" value="{{income_form.get('name','Výplata netto')}}">
 <label>Suma</label><input name="amount" value="{{income_form.get('amount','2000')}}">
 <label>Deň v mesiaci</label><input name="day" value="{{income_form.get('day','15')}}">
@@ -947,8 +980,9 @@ window.BP_EDIT_TARGET = "{% if edit_payment is not none %}edit-form-payment{% el
 <div class="card" id="edit-form-payment">
 <h2>{% if edit_payment is not none %}Upraviť platbu{% else %}Pravidelná platba{% endif %}</h2>
 <form method="post" action="{% if edit_payment is not none %}/payment/update/{{edit_payment}}{% else %}/payment/add{% endif %}">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 <label>Typ</label>
-<select name="type">{% for t in payment_types %}<option {% if payment_form.type==t %}selected{% endif %}>{{t}}</option>{% endfor %}</select>
+<select name="type">{% for t in payment_types %}<option value="{{t}}" {% if payment_form.type==t %}selected{% endif %}>{{t}}</option>{% endfor %}</select>
 <label>Názov pri „Iné“</label><input name="name" value="{{payment_form.name}}" placeholder="napr. škôlka, leasing, daň">
 <label>Suma</label><input name="amount" value="{{payment_form.amount}}" placeholder="napr. 820">
 <div class="inline">
@@ -973,6 +1007,7 @@ window.BP_EDIT_TARGET = "{% if edit_payment is not none %}edit-form-payment{% el
 <div class="card">
 <h2>Jednorazová platba</h2>
 <form method="post" action="/onetime/add">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 <label>Názov</label><input name="name" placeholder="napr. servis auta">
 <label>Suma</label><input name="amount" placeholder="napr. 180">
 <label>Termín splatnosti</label><input name="due_date" value="{{today}}">
@@ -985,6 +1020,7 @@ window.BP_EDIT_TARGET = "{% if edit_payment is not none %}edit-form-payment{% el
 <div class="card">
 <h2>Dlhy a pôžičky</h2>
 <form method="post" action="/debt/add">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 <label>Názov / komu-od koho</label><input name="name" placeholder="napr. Peter, pôžička na auto">
 <label>Suma</label><input name="amount" placeholder="napr. 300">
 <label>Smer</label>
@@ -1002,6 +1038,7 @@ window.BP_EDIT_TARGET = "{% if edit_payment is not none %}edit-form-payment{% el
 <div class="card" id="expense-quick">
 <h2>Rýchly výdavok</h2>
 <form method="post" action="/expense/add">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 <input type="hidden" name="name" value="Rýchly výdavok">
 <label>Suma</label><input name="amount" placeholder="napr. 50">
 <input type="hidden" name="date" value="{{today}}">
@@ -1012,8 +1049,9 @@ window.BP_EDIT_TARGET = "{% if edit_payment is not none %}edit-form-payment{% el
 <div class="card" id="edit-form-expense">
 <h2>{% if edit_expense is not none %}Upraviť výdavok{% else %}Detailný výdavok{% endif %}</h2>
 <form method="post" action="{% if edit_expense is not none %}/expense/update/{{edit_expense}}{% else %}/expense/add{% endif %}">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 <label>Typ (obálka)</label>
-<select name="name">{% for t in expense_types %}<option {% if expense_form.name==t %}selected{% endif %}>{{t}}</option>{% endfor %}</select>
+<select name="name">{% for t in expense_types %}<option value="{{t}}" {% if expense_form.name==t %}selected{% endif %}>{{t}}</option>{% endfor %}</select>
 <label>Suma</label><input name="amount" value="{{expense_form.amount}}">
 <label>Poznámka / obchod (voliteľné)</label><input name="merchant" value="{{expense_form.get('merchant','')}}" placeholder="napr. Lidl">
 <label>Dátum</label><input type="date" name="date" value="{{expense_form.date}}">
@@ -1029,6 +1067,7 @@ window.BP_EDIT_TARGET = "{% if edit_payment is not none %}edit-form-payment{% el
 <div class="card" id="receipt-upload">
 <h2>Pridať výdavok z účtenky</h2>
 <form method="post" action="/receipt/upload" enctype="multipart/form-data">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 <label>Fotka účtenky</label>
 <input type="file" name="image" accept="image/*" capture="environment" required>
 <div class="small">Rozpoznaná suma je len návrh. Pred uložením ju vždy uvidíš a môžeš opraviť.</div>
@@ -1042,6 +1081,7 @@ window.BP_EDIT_TARGET = "{% if edit_payment is not none %}edit-form-payment{% el
 <div class="small">Odhad z OCR — over si sumu a dátum, priradí sa kategória, a až potom sa uloží ako výdavok.</div>
 <img class="receipt-thumb" src="/receipt/image/{{receipt_review.receipt_id}}" alt="Fotka účtenky">
 <form method="post" action="/receipt/confirm">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 <input type="hidden" name="receipt_id" value="{{receipt_review.receipt_id}}">
 <input type="hidden" name="image_path" value="{{receipt_review.image_path}}">
 {% if receipt_review.candidates %}
@@ -1058,7 +1098,7 @@ window.BP_EDIT_TARGET = "{% if edit_payment is not none %}edit-form-payment{% el
 {% endif %}
 <label>Vybraná suma</label><input id="receipt-amount" name="amount" value="{{receipt_review.amount or ''}}" placeholder="skontroluj sumu">
 <label>Obálka</label>
-<select name="name">{% for t in expense_types %}<option {% if t=='Iné' %}selected{% endif %}>{{t}}</option>{% endfor %}</select>
+<select name="name">{% for t in expense_types %}<option value="{{t}}" {% if t=='Iné' %}selected{% endif %}>{{t}}</option>{% endfor %}</select>
 <label>Poznámka (voliteľné, aj obchod)</label><input name="merchant" value="{{receipt_review.merchant or ''}}" placeholder="napr. Lidl">
 <label>Dátum</label><input name="date" value="{{receipt_review.date or today}}">
 <div class="btn-row">
@@ -1074,8 +1114,9 @@ window.BP_EDIT_TARGET = "{% if edit_payment is not none %}edit-form-payment{% el
 <div class="card" id="envelope-form">
 <h2>Obálka (mesačný limit)</h2>
 <form method="post" action="/envelope/add">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 <label>Kategória</label>
-<select name="category">{% for t in expense_types %}<option>{{t}}</option>{% endfor %}</select>
+<select name="category">{% for t in expense_types %}<option value="{{t}}">{{t}}</option>{% endfor %}</select>
 <label>Mesačný limit</label><input name="monthly_limit" placeholder="napr. 200">
 <div class="small">Ak už na túto kategóriu obálka existuje, uloženie iba prepíše jej limit.</div>
 <div class="btn-row"><button>Uložiť obálku</button></div>
@@ -1087,7 +1128,7 @@ window.BP_EDIT_TARGET = "{% if edit_payment is not none %}edit-form-payment{% el
 <main class="main" id="overview">
 <section class="screen-header">
 <div>
-<div class="screen-eyebrow">Saldo · cyklus {{cycle_key}}</div>
+<div class="screen-eyebrow">BudgetPilot · cyklus {{cycle_key}}</div>
 <h1>{{view_title}}</h1>
 <p>{{view_subtitle}}</p>
 </div>
@@ -1159,6 +1200,7 @@ Po započítaní otvorených platieb a zostávajúcich obálok ostáva {{summary
 <details class="real-balance-toggle" id="balance-update-field">
 <summary>✎ Upraviť stav účtu</summary>
 <form class="real-update" method="post" action="/api/balance/update">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 <div><label>Nový stav účtu</label><input name="account_balance" inputmode="decimal" type="number" step="0.01" value="{{balance_summary.current_balance}}"></div>
 <div><button type="submit">Uložiť stav</button></div>
 </form>
@@ -1295,6 +1337,7 @@ Po započítaní otvorených platieb a zostávajúcich obálok ostáva {{summary
 {% if p.state == 'paid_me' and not p.get('main_balance_adjusted') %}
 <div class="task-card-actions">
 <form method="post" action="/payment/state/by-id" class="paid-quick-form">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 <input type="hidden" name="payment_id" value="{{p.get('id','')}}">
 <input type="hidden" name="cycle_key" value="{{cycle_key}}">
 <input type="hidden" name="state" value="paid_me">
@@ -1366,11 +1409,13 @@ Po započítaní otvorených platieb a zostávajúcich obálok ostáva {{summary
 <div class="manager-actions">
 {% if rx.state != 'paid_me' %}
 <form method="post" action="/payment/state/{{loop.index0}}" class="primary-pay full">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 <input type="hidden" name="state" value="paid_me">
 <button>✓ Zaplatené z účtu</button>
 </form>
 {% endif %}
 <form method="post" action="/payment/state/{{loop.index0}}" class="full">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 <select name="state">
 {% for s in selectable_states %}<option value="{{s}}" {% if rx.state==s %}selected{% endif %}>{{state_label.get(s,s)}}</option>{% endfor %}
 </select>
@@ -1378,7 +1423,7 @@ Po započítaní otvorených platieb a zostávajúcich obálok ostáva {{summary
 </form>
 {{ defer_widget(x.get('id',''), cycle_key, '↷ Odložiť') }}
 <form method="get" action="/edit/payment/{{loop.index0}}"><button class="secondary">Upraviť</button></form>
-<form method="post" action="/payment/delete/{{loop.index0}}"><button class="danger">Zmazať</button></form>
+<form method="post" action="/payment/delete/{{loop.index0}}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="danger">Zmazať</button></form>
 </div>
 </div>
 {% endfor %}
@@ -1407,18 +1452,20 @@ Po započítaní otvorených platieb a zostávajúcich obálok ostáva {{summary
 <div class="manager-actions">
 {% if x.state != 'paid_me' %}
 <form method="post" action="/onetime/state/{{x._index}}" class="primary-pay full">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 <input type="hidden" name="state" value="paid_me">
 <button>✓ Zaplatené z účtu</button>
 </form>
 {% endif %}
 <form method="post" action="/onetime/state/{{x._index}}" class="full">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 <select name="state">
 {% for s in selectable_states %}<option value="{{s}}" {% if x.state==s %}selected{% endif %}>{{state_label.get(s,s)}}</option>{% endfor %}
 </select>
 <button class="secondary">Nastaviť stav</button>
 </form>
-<form method="post" action="/onetime/defer/{{x._index}}"><button class="secondary">Odložiť o 7 dní</button></form>
-<form method="post" action="/onetime/delete/{{x._index}}"><button class="danger">Zmazať</button></form>
+<form method="post" action="/onetime/defer/{{x._index}}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="secondary">Odložiť o 7 dní</button></form>
+<form method="post" action="/onetime/delete/{{x._index}}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="danger">Zmazať</button></form>
 </div>
 </div>
 {% endfor %}
@@ -1441,12 +1488,13 @@ Po započítaní otvorených platieb a zostávajúcich obálok ostáva {{summary
 <td><span class="badge {% if d.state in ('paid_me','received') %}ok{% elif d.state=='deferred' %}warn{% endif %}">{{debt_state_label.get(d.state, d.state)}}</span></td>
 <td class="actions-stack">
 <form method="post" action="/debt/state/{{loop.index0}}">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 <select name="state">
 {% for s in debt_states_by_direction.get(d.direction, []) %}<option value="{{s}}" {% if d.state==s %}selected{% endif %}>{{debt_state_label.get(s,s)}}</option>{% endfor %}
 </select>
 <button class="secondary">Nastaviť</button>
 </form>
-<form method="post" action="/debt/delete/{{loop.index0}}"><button class="danger">Zmazať</button></form>
+<form method="post" action="/debt/delete/{{loop.index0}}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="danger">Zmazať</button></form>
 </td></tr>
 {% endfor %}
 </table>
@@ -1502,7 +1550,7 @@ Po započítaní otvorených platieb a zostávajúcich obálok ostáva {{summary
 <tr><td>{{x.get('name')}}{% if x.get('source')=='ocr' %} <span class="badge">OCR{% if x.get('merchant') %}: {{x.merchant}}{% endif %}</span>{% endif %}</td><td>{{x.get('amount')}} €</td><td>{{x.get('date')}}</td>
 <td class="actions">
 <form method="get" action="/edit/expense/{{loop.index0}}"><button class="secondary">Upraviť</button></form>
-<form method="post" action="/expense/delete/{{loop.index0}}"><button class="danger">Zmazať</button></form>
+<form method="post" action="/expense/delete/{{loop.index0}}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="danger">Zmazať</button></form>
 </td></tr>
 {% endfor %}
 </table>
@@ -1525,7 +1573,7 @@ Po započítaní otvorených platieb a zostávajúcich obálok ostáva {{summary
 <td class="{% if r.over_budget %}bad{% else %}ok{% endif %}">{{"%.2f"|format(r.remaining)}} €</td>
 <td class="small">{{"%.2f"|format(r.avg_3m)}} €</td>
 <td class="actions">
-<form method="post" action="/envelope/delete/{{loop.index0}}"><button class="danger">Zmazať</button></form>
+<form method="post" action="/envelope/delete/{{loop.index0}}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="danger">Zmazať</button></form>
 </td>
 </tr>
 {% endfor %}
@@ -1549,7 +1597,7 @@ Po započítaní otvorených platieb a zostávajúcich obálok ostáva {{summary
 <tr><td>{{x.get('name')}}</td><td>{{x.get('amount')}} €</td><td>{{x.get('day')}}</td>
 <td class="actions">
 <form method="get" action="/edit/income/{{loop.index0}}"><button class="secondary">Upraviť</button></form>
-<form method="post" action="/income/delete/{{loop.index0}}"><button class="danger">Zmazať</button></form>
+<form method="post" action="/income/delete/{{loop.index0}}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="danger">Zmazať</button></form>
 </td></tr>
 {% endfor %}
 </table>
@@ -1583,6 +1631,7 @@ Po započítaní otvorených platieb a zostávajúcich obálok ostáva {{summary
 <td>{{b.size}}</td>
 <td>
 <form method="post" action="/settings/restore" class="restore-form">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 <input type="hidden" name="backup_name" value="{{b.name}}">
 <input type="text" name="confirm_code" autocomplete="off" placeholder="{{reset_confirm_code}}">
 <button type="submit" class="secondary">Obnoviť</button>
@@ -1608,6 +1657,7 @@ aby sa dala v prípade potreby obnoviť ručne.
 <div class="small" style="color:var(--red);font-weight:700">Kód sa nezhodoval, nič sa nezmazalo. Skús to znova.</div>
 {% endif %}
 <form method="post" action="/settings/reset" id="reset-form">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 <label>Na potvrdenie napíš presne: {{ reset_confirm_code }}</label>
 <input type="text" name="confirm_code" id="reset-confirm-input" autocomplete="off" placeholder="{{ reset_confirm_code }}">
 <div class="btn-row"><button type="submit" class="danger" id="reset-submit-btn" data-code="{{ reset_confirm_code }}" disabled>Vymazať všetko a začať odznova</button></div>
@@ -2097,6 +2147,7 @@ aby sa dala v prípade potreby obnoviť ručne.
           '<button type="button" class="envelope-card-btn secondary envelope-toggle-edit">Upraviť</button>' +
         '</div>' +
         '<form class="envelope-edit-row" method="post" action="/api/envelopes/update" hidden>' +
+          '<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">' +
           '<input type="hidden" name="id">' +
           '<div><label>Názov</label><input name="name"></div>' +
           '<div><label>Mesačná suma</label><input name="amount" inputmode="decimal" type="number" step="0.01" min="0"></div>' +
@@ -2339,6 +2390,7 @@ aby sa dala v prípade potreby obnoviť ručne.
       '<details class="real-balance-toggle" id="balance-update-field">' +
         '<summary>✎ Upraviť stav účtu</summary>' +
         '<form class="real-update" method="post" action="/api/balance/update">' +
+          '<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">' +
           '<div><label>Nový stav účtu</label><input name="account_balance" inputmode="decimal" type="number" step="0.01" value="'+Number(data.current_balance||0)+'"></div>' +
           '<div><button type="submit">Uložiť stav</button></div>' +
         '</form>' +

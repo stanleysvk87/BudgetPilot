@@ -21,10 +21,12 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # for csrf_test_support
 
 import budgetpilot_web as web
 import first_run_wizard as wiz
 import audit_log
+import csrf_test_support
 
 
 class FullResetTests(unittest.TestCase):
@@ -59,6 +61,11 @@ class FullResetTests(unittest.TestCase):
             self.addCleanup(p.stop)
 
         web.app.config["TESTING"] = True
+        previous_auth_bypass = web.app.config.get("BUDGETPILOT_AUTH_BYPASS")
+        web.app.config["BUDGETPILOT_AUTH_BYPASS"] = True
+        self.addCleanup(web.app.config.__setitem__, "BUDGETPILOT_AUTH_BYPASS", previous_auth_bypass)
+        previous_client_class = csrf_test_support.install(web.app)
+        self.addCleanup(setattr, web.app, "test_client_class", previous_client_class)
         self.client = web.app.test_client()
 
     def test_wrong_code_does_not_touch_any_data(self):

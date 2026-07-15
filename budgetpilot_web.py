@@ -3,13 +3,17 @@ import hmac
 import json
 import os
 import re
+import secrets
 import shutil
 import subprocess
+import time
 import uuid
 from pathlib import Path
 from datetime import date, datetime
 from urllib.parse import urlparse
-from flask import Flask, abort, jsonify, request, redirect, render_template, send_file, Response
+from flask import Flask, abort, g, has_request_context, jsonify, request, redirect, render_template, render_template_string, send_file, session, Response
+from werkzeug.middleware.proxy_fix import ProxyFix
+from werkzeug.security import check_password_hash, generate_password_hash
 
 import obligations as ob
 import receipts
@@ -21,6 +25,15 @@ import balance_first_summary as bfs
 import json_store
 from forecast import payment_state, PENDING, PAID_ME, PAID_OTHER, PAID_RESERVE, DEFERRED
 from paths import app_base, data_dir
+from i18n import (
+    DEFAULT_LANGUAGE,
+    LANGUAGE_COOKIE,
+    LANGUAGE_SESSION_KEY,
+    SUPPORTED_LANGUAGES,
+    normalize_language,
+    translate,
+    translate_html,
+)
 
 BASE = app_base()
 DATA = data_dir()
@@ -73,10 +86,175 @@ MONTH_NAME_SK = {
     1: "január", 2: "február", 3: "marec", 4: "apríl", 5: "máj", 6: "jún",
     7: "júl", 8: "august", 9: "september", 10: "október", 11: "november", 12: "december",
 }
+MONTH_NAME_EN = {
+    1: "January", 2: "February", 3: "March", 4: "April", 5: "May", 6: "June",
+    7: "July", 8: "August", 9: "September", 10: "October", 11: "November", 12: "December",
+}
 
 DATA.mkdir(parents=True, exist_ok=True)
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
+if os.environ.get("BUDGETPILOT_PROXY_FIX", "").lower() in {"1", "true", "yes"}:
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
+
+SECRET_KEY_PATH = DATA / ".session_secret_key"
+
+def _load_or_create_secret_key():
+    """Flask needs a stable secret_key to sign the session cookie the
+    CSRF token lives in. Persisted to disk (rather than generated fresh
+    on every process start) so a systemd restart or deploy doesn't
+    invalidate every already-open browser tab's forms -- generated once,
+    reused after that. Never logged, never included in a backup listing
+    beyond the same data/ directory everything else already lives in
+    (see .gitignore: this path is explicitly excluded).
+    """
+    try:
+        existing = SECRET_KEY_PATH.read_text().strip()
+        if existing:
+            return existing
+    except OSError:
+        pass
+    SECRET_KEY_PATH.parent.mkdir(parents=True, exist_ok=True)
+    key = secrets.token_hex(32)
+    try:
+        fd = os.open(str(SECRET_KEY_PATH), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        for _ in range(50):
+            try:
+                existing = SECRET_KEY_PATH.read_text().strip()
+                if existing:
+                    return existing
+            except OSError:
+                pass
+            time.sleep(0.02)
+        raise RuntimeError(f"session secret exists but is empty or unreadable: {SECRET_KEY_PATH}")
+    else:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(key)
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+        return key
+
+app.secret_key = _load_or_create_secret_key()
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SECURE"] = (
+    os.environ.get("BUDGETPILOT_COOKIE_SECURE", "").lower() in {"1", "true", "yes"}
+    or os.environ.get("BUDGETPILOT_PUBLIC_URL", "").lower().startswith("https://")
+)
+
+CSRF_SESSION_KEY = "_csrf_token"
+CSRF_FORM_FIELD = "csrf_token"
+CSRF_HEADER = "X-CSRF-Token"
+AUTH_SESSION_KEY = "budgetpilot_admin"
+LOGIN_NEXT_SESSION_KEY = "budgetpilot_login_next"
+LOGIN_ATTEMPT_SESSION_KEY = "budgetpilot_login_attempts"
+LOGIN_LOCK_UNTIL_SESSION_KEY = "budgetpilot_login_lock_until"
+MAX_LOGIN_ATTEMPTS = 5
+LOGIN_LOCK_SECONDS = 300
+
+def get_csrf_token():
+    """The current session's CSRF token, creating one (and a session, if
+    none exists yet) on first use. Registered as a Jinja global below, so
+    every template can call {{ csrf_token() }} without importing anything.
+    """
+    token = session.get(CSRF_SESSION_KEY)
+    if not token:
+        token = secrets.token_hex(16)
+        session[CSRF_SESSION_KEY] = token
+    return token
+
+app.jinja_env.globals["csrf_token"] = get_csrf_token
+
+def current_language():
+    if not has_request_context():
+        return DEFAULT_LANGUAGE
+    return normalize_language(
+        getattr(g, "language", None)
+        or session.get(LANGUAGE_SESSION_KEY)
+        or request.cookies.get(LANGUAGE_COOKIE)
+        or request.accept_languages.best_match(list(SUPPORTED_LANGUAGES))
+    )
+
+def t(text, **values):
+    return translate(text, current_language(), **values)
+
+def _safe_local_path(value, default="/"):
+    parsed = urlparse(value or default)
+    if parsed.scheme or parsed.netloc or not parsed.path.startswith("/"):
+        return default
+    return parsed.path + (("?" + parsed.query) if parsed.query else "")
+
+app.jinja_env.globals["_"] = t
+app.jinja_env.globals["t"] = t
+app.jinja_env.globals["current_language"] = current_language
+app.jinja_env.globals["supported_languages"] = lambda: SUPPORTED_LANGUAGES
+
+@app.before_request
+def load_language_preference():
+    lang = normalize_language(
+        request.args.get("lang")
+        or session.get(LANGUAGE_SESSION_KEY)
+        or request.cookies.get(LANGUAGE_COOKIE)
+        or request.accept_languages.best_match(list(SUPPORTED_LANGUAGES))
+    )
+    g.language = lang
+    session[LANGUAGE_SESSION_KEY] = lang
+
+@app.route("/language/<language>", endpoint="set_language")
+def set_language(language):
+    lang = normalize_language(language)
+    session[LANGUAGE_SESSION_KEY] = lang
+    target = _safe_local_path(request.args.get("next") or request.referrer or "/")
+    response = redirect(target)
+    response.set_cookie(LANGUAGE_COOKIE, lang, max_age=60 * 60 * 24 * 365, samesite="Lax")
+    return response
+
+@app.after_request
+def apply_localization(response):
+    lang = current_language()
+    response.set_cookie(LANGUAGE_COOKIE, lang, max_age=60 * 60 * 24 * 365, samesite="Lax")
+    content_type = response.headers.get("Content-Type", "")
+    if response.direct_passthrough or "text/html" not in content_type:
+        return response
+    html = response.get_data(as_text=True)
+    localized = translate_html(html, lang)
+    if localized != html:
+        response.set_data(localized)
+        response.headers["Content-Length"] = str(len(response.get_data()))
+    return response
+
+CSRF_ERROR_HTML = """<!doctype html>
+<html lang="sk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BudgetPilot - bezpečnostná kontrola zlyhala</title>
+<style>
+body{{font-family:system-ui,-apple-system,sans-serif;background:#0f172a;color:#e5e7eb;
+     max-width:640px;margin:60px auto;padding:0 20px;line-height:1.5}}
+h1{{font-size:22px}}
+a{{color:#60a5fa}}
+</style>
+</head>
+<body>
+<h1>Bezpečnostná kontrola zlyhala</h1>
+<p>Formulár, ktorý si odoslal, mal chýbajúci alebo neplatný bezpečnostný token
+(CSRF). Toto sa väčšinou stane, keď je stránka otvorená príliš dlho alebo bola
+odoslaná dvakrát.</p>
+<p>Obnov stránku a skús akciu zopakovať.</p>
+<p><a href="{back}">← Späť na prehľad</a></p>
+</body>
+</html>"""
+
+def _csrf_error_response():
+    back = request.referrer or "/"
+    parsed = urlparse(back)
+    safe_back = parsed.path if parsed.path.startswith("/") else "/"
+    return Response(CSRF_ERROR_HTML.format(back=safe_back), 400, {"Content-Type": "text/html; charset=utf-8"})
+
+SAFE_HTTP_METHODS = {"GET", "HEAD", "OPTIONS"}
 
 def _auth_password():
     return os.environ.get("BUDGETPILOT_PASSWORD", "").strip()
@@ -87,19 +265,254 @@ def _auth_username():
 def _auth_enabled():
     return bool(_auth_password())
 
-@app.before_request
-def require_basic_auth():
+def _listen_host():
+    return os.environ.get("BUDGETPILOT_HOST", "0.0.0.0").strip() or "0.0.0.0"
+
+def _listen_port():
+    try:
+        return int(os.environ.get("BUDGETPILOT_PORT", "8765"))
+    except ValueError:
+        return 8765
+
+def _users_path():
+    return SETTINGS.parent / "users.json"
+
+def _load_user_store():
+    data = json_store.read_json(_users_path(), {"users": []})
+    if not isinstance(data, dict):
+        return {"users": []}
+    users = data.get("users")
+    if not isinstance(users, list):
+        data["users"] = []
+    return data
+
+def _save_user_store(data):
+    json_store.atomic_write_json(_users_path(), data)
+
+def _admin_user():
+    users = _load_user_store().get("users", [])
+    for user in users:
+        if isinstance(user, dict) and user.get("username") and user.get("password_hash"):
+            return user
+    return None
+
+def _has_admin_user():
+    return _admin_user() is not None
+
+def _safe_next(default="/"):
+    value = request.args.get("next") or request.form.get("next") or session.get(LOGIN_NEXT_SESSION_KEY) or default
+    parsed = urlparse(value)
+    if parsed.scheme or parsed.netloc or not parsed.path.startswith("/"):
+        return default
+    return parsed.path + (("?" + parsed.query) if parsed.query else "")
+
+def _basic_auth_valid():
     password = _auth_password()
     if not password:
-        return None
+        return False
     auth = request.authorization
-    if auth and hmac.compare_digest(auth.username or "", _auth_username()) and hmac.compare_digest(auth.password or "", password):
-        return None
-    return Response(
-        "Vyžaduje sa prihlásenie.\n",
-        401,
-        {"WWW-Authenticate": 'Basic realm="Saldo", charset="UTF-8"'},
+    return bool(
+        auth
+        and hmac.compare_digest(auth.username or "", _auth_username())
+        and hmac.compare_digest(auth.password or "", password)
     )
+
+def _session_authenticated():
+    admin = _admin_user()
+    return bool(admin and session.get(AUTH_SESSION_KEY) == admin.get("username"))
+
+def _is_auth_public_endpoint():
+    if request.endpoint in {"auth_setup", "auth_login", "set_language", "static"}:
+        return True
+    return request.path.startswith("/static")
+
+@app.before_request
+def require_authentication():
+    if _is_auth_public_endpoint():
+        return None
+    if app.config.get("BUDGETPILOT_AUTH_BYPASS"):
+        return None
+    if _basic_auth_valid() or _session_authenticated():
+        return None
+    if _auth_enabled() and request.authorization:
+        return _basic_auth_challenge()
+    if _auth_enabled() and not _has_admin_user():
+        return _basic_auth_challenge()
+    if not _has_admin_user():
+        return redirect("/auth/setup")
+    if request.method not in SAFE_HTTP_METHODS:
+        session[LOGIN_NEXT_SESSION_KEY] = request.referrer or "/"
+    else:
+        session[LOGIN_NEXT_SESSION_KEY] = request.full_path.rstrip("?") or "/"
+    return redirect(f"/login?next={_safe_next('/')}")
+
+def _basic_auth_challenge():
+    return Response(
+        t("Vyžaduje sa prihlásenie.") + "\n",
+        401,
+        {"WWW-Authenticate": 'Basic realm="BudgetPilot", charset="UTF-8"'},
+    )
+
+def _login_locked():
+    lock_until = float(session.get(LOGIN_LOCK_UNTIL_SESSION_KEY, 0) or 0)
+    return lock_until > datetime.now().timestamp()
+
+def _record_failed_login():
+    attempts = int(session.get(LOGIN_ATTEMPT_SESSION_KEY, 0) or 0) + 1
+    session[LOGIN_ATTEMPT_SESSION_KEY] = attempts
+    if attempts >= MAX_LOGIN_ATTEMPTS:
+        session[LOGIN_LOCK_UNTIL_SESSION_KEY] = datetime.now().timestamp() + LOGIN_LOCK_SECONDS
+
+def _clear_login_failures():
+    session.pop(LOGIN_ATTEMPT_SESSION_KEY, None)
+    session.pop(LOGIN_LOCK_UNTIL_SESSION_KEY, None)
+
+AUTH_PAGE_CSS = """
+body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
+background:radial-gradient(circle at top left,#1e3a8a 0,#0f172a 38%,#020617 100%);
+color:#e5e7eb;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+.card{width:min(480px,calc(100vw - 28px));background:rgba(15,23,42,.94);
+border:1px solid rgba(148,163,184,.22);border-radius:20px;padding:22px;
+box-shadow:0 24px 80px rgba(0,0,0,.38)}
+h1{margin:0 0 8px;font-size:28px}.hint{color:#cbd5e1;line-height:1.45;font-size:14px}
+label{display:block;color:#94a3b8;font-size:13px;margin:14px 0 6px}
+input{width:100%;box-sizing:border-box;border:1px solid #475569;border-radius:12px;
+background:#020617;color:#e5e7eb;padding:12px;font-size:15px}
+button{width:100%;margin-top:18px;border:0;border-radius:12px;background:#2563eb;
+color:white;padding:12px 14px;font-weight:850;font-size:15px;cursor:pointer}
+.error{margin-top:12px;color:#fecaca;background:rgba(127,29,29,.28);
+border:1px solid rgba(239,68,68,.35);border-radius:12px;padding:10px;font-size:13px}
+.warning{margin:12px 0 0;color:#fed7aa;background:rgba(120,53,15,.24);
+border:1px solid rgba(245,158,11,.30);border-radius:12px;padding:10px;font-size:13px}
+.language-switch{position:fixed;top:14px;right:14px;display:flex;gap:6px}
+.language-switch a{color:#e5e7eb;text-decoration:none;border:1px solid rgba(148,163,184,.35);
+border-radius:999px;padding:7px 10px;font-size:12px;font-weight:800;background:rgba(15,23,42,.86)}
+.language-switch a.active{background:#2563eb;border-color:#93c5fd}
+"""
+
+AUTH_SETUP_HTML = """<!doctype html>
+<html lang="sk"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BudgetPilot - vytvorenie správcu</title><style>{{css|safe}}</style></head>
+<body><div class="language-switch" aria-label="Language">
+<a href="/language/sk?next=/auth/setup" class="{% if current_language() == 'sk' %}active{% endif %}">SK</a>
+<a href="/language/en?next=/auth/setup" class="{% if current_language() == 'en' %}active{% endif %}">EN</a>
+</div><main class="card">
+<h1>Vytvor správcu</h1>
+<div class="hint">BudgetPilot ukladá osobné finančné údaje. Pred používaním vytvor lokálny správcovský účet. Aplikáciu nevystavuj priamo na verejný internet.</div>
+<div class="warning">Ak chceš vzdialený prístup, použi VPN alebo Tailscale. HTTPS alebo Docker samy o sebe nie sú prihlásenie.</div>
+{% if error %}<div class="error">{{error}}</div>{% endif %}
+<form method="post">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+<label>Používateľské meno</label>
+<input name="username" autocomplete="username" minlength="3" required>
+<label>Heslo</label>
+<input name="password" type="password" autocomplete="new-password" minlength="10" required>
+<label>Zopakuj heslo</label>
+<input name="password_confirm" type="password" autocomplete="new-password" minlength="10" required>
+<button type="submit">Vytvoriť správcu</button>
+</form>
+</main></body></html>"""
+
+LOGIN_HTML = """<!doctype html>
+<html lang="sk"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BudgetPilot - prihlásenie</title><style>{{css|safe}}</style></head>
+<body><div class="language-switch" aria-label="Language">
+<a href="/language/sk?next=/login" class="{% if current_language() == 'sk' %}active{% endif %}">SK</a>
+<a href="/language/en?next=/login" class="{% if current_language() == 'en' %}active{% endif %}">EN</a>
+</div><main class="card">
+<h1>Prihlásenie</h1>
+<div class="hint">Prihlás sa do lokálnej inštancie BudgetPilot.</div>
+{% if error %}<div class="error">{{error}}</div>{% endif %}
+<form method="post">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+<input type="hidden" name="next" value="{{next_url}}">
+<label>Používateľské meno</label>
+<input name="username" autocomplete="username" required>
+<label>Heslo</label>
+<input name="password" type="password" autocomplete="current-password" required>
+<button type="submit">Prihlásiť sa</button>
+</form>
+</main></body></html>"""
+
+@app.route("/auth/setup", methods=["GET", "POST"])
+def auth_setup():
+    if _has_admin_user():
+        return redirect("/")
+    error = ""
+    if request.method == "POST":
+        username = (request.form.get("username") or "").strip()
+        password = request.form.get("password") or ""
+        password_confirm = request.form.get("password_confirm") or ""
+        if len(username) < 3:
+            error = "Používateľské meno musí mať aspoň 3 znaky."
+        elif len(password) < 10:
+            error = "Heslo musí mať aspoň 10 znakov."
+        elif password != password_confirm:
+            error = "Heslá sa nezhodujú."
+        else:
+            now = datetime.now().isoformat(timespec="seconds")
+            _save_user_store({
+                "users": [{
+                    "username": username,
+                    "password_hash": generate_password_hash(password),
+                    "created_at": now,
+                    "updated_at": now,
+                }]
+            })
+            session.clear()
+            session[AUTH_SESSION_KEY] = username
+            return redirect("/")
+    return render_template_string(AUTH_SETUP_HTML, css=AUTH_PAGE_CSS, error=error)
+
+@app.route("/login", methods=["GET", "POST"], endpoint="auth_login")
+def login():
+    if not _has_admin_user():
+        return redirect("/auth/setup")
+    next_url = _safe_next("/")
+    error = ""
+    if request.method == "POST":
+        if _login_locked():
+            error = "Príliš veľa neúspešných pokusov. Skús to neskôr."
+        else:
+            username = (request.form.get("username") or "").strip()
+            password = request.form.get("password") or ""
+            admin = _admin_user()
+            if admin and hmac.compare_digest(username, admin.get("username", "")) and check_password_hash(admin.get("password_hash", ""), password):
+                session.clear()
+                session[AUTH_SESSION_KEY] = admin["username"]
+                _clear_login_failures()
+                return redirect(next_url)
+            _record_failed_login()
+            error = "Neplatné prihlasovacie údaje."
+    return render_template_string(LOGIN_HTML, css=AUTH_PAGE_CSS, error=error, next_url=next_url)
+
+@app.post("/logout")
+def logout():
+    session.clear()
+    return redirect("/login")
+
+@app.get("/logout")
+def logout_get():
+    session.clear()
+    return redirect("/login")
+
+# Registered after require_authentication so an unauthenticated request always
+# gets the expected login/setup/401 response rather than a confusing CSRF
+# error -- Flask runs before_request hooks in registration order.
+@app.before_request
+def require_csrf_token():
+    """Every state-changing request (anything that isn't GET/HEAD/OPTIONS)
+    must carry the current session's CSRF token, either as a form field
+    or an X-CSRF-Token header (fetch()-based POSTs that don't submit a
+    real <form>). GET stays read-only and untouched by this check.
+    """
+    if request.method in SAFE_HTTP_METHODS:
+        return None
+    expected = session.get(CSRF_SESSION_KEY)
+    submitted = request.form.get(CSRF_FORM_FIELD) or request.headers.get(CSRF_HEADER)
+    if not expected or not submitted or not hmac.compare_digest(expected, submitted):
+        return _csrf_error_response()
+    return None
 
 @app.after_request
 def add_security_headers(response):
@@ -270,9 +683,10 @@ def run_core(args=None):
         cmd = [str(BASE / "budgetpilot.py")]
         if args:
             cmd += args
-        return subprocess.check_output(cmd, text=True)
+        env = {**os.environ, "BUDGETPILOT_LANG": current_language()}
+        return subprocess.check_output(cmd, text=True, env=env)
     except Exception as e:
-        return f"CHYBA:\n{e}"
+        return f"{t('CHYBA:')}\n{e}"
 
 def parse_dash(core):
     d = {
@@ -397,7 +811,7 @@ def _payment_action_impact(action_path, form):
 
     balance_delta = 0.0
     after_category = None
-    action_label = "Zmazať platbu" if target["action"] == "delete" else "Zmeniť stav platby"
+    action_label = t("Zmazať platbu") if target["action"] == "delete" else t("Zmeniť stav platby")
 
     if target["action"] == "state":
         new_state = target["state"]
@@ -409,7 +823,7 @@ def _payment_action_impact(action_path, form):
             simulated_event["main_balance_adjusted"] = True
             simulated_event["main_balance_delta"] = stored_delta
         after_category = _event_holdback_category(new_state, simulated_event, target["cycle_key"])
-        action_label = f"Nastaviť: {STATE_LABEL.get(new_state, new_state)}"
+        action_label = f"{t('Nastaviť:')} {t(STATE_LABEL.get(new_state, new_state))}"
 
     before_holdback = amount if before_category in {"unpaid", "unsettled"} else 0.0
     after_holdback = amount if after_category in {"unpaid", "unsettled"} else 0.0
@@ -455,12 +869,12 @@ def _impact_message(impact):
     return "\n".join([
         f"{impact['action_label']}: {impact['label']}",
         "",
-        f"Stav účtu: {eur(before['current_balance'])} -> {eur(after['current_balance'])}",
-        f"Ešte treba zaplatiť: {eur(before['unpaid_payments_total'])} -> {eur(after['unpaid_payments_total'])}",
-        f"Zaplatené mimo zostatku: {eur(before['unsettled_paid_total'])} -> {eur(after['unsettled_paid_total'])}",
-        f"Reálne k dispozícii: {eur(before['estimated_after_payments_and_envelopes'])} -> {eur(after['estimated_after_payments_and_envelopes'])}",
+        f"{t('Stav účtu:')} {eur(before['current_balance'])} -> {eur(after['current_balance'])}",
+        f"{t('Ešte treba zaplatiť:')} {eur(before['unpaid_payments_total'])} -> {eur(after['unpaid_payments_total'])}",
+        f"{t('Zaplatené mimo zostatku:')} {eur(before['unsettled_paid_total'])} -> {eur(after['unsettled_paid_total'])}",
+        f"{t('Reálne k dispozícii:')} {eur(before['estimated_after_payments_and_envelopes'])} -> {eur(after['estimated_after_payments_and_envelopes'])}",
         "",
-        "Pokračovať?",
+        t("Pokračovať?"),
     ])
 
 def _corrupt_data_files():
@@ -777,11 +1191,14 @@ def _build_system_status(problem_reports, backups, setup_needed, settings):
     })
 
     rows.append({
-        "state": "ok" if _auth_enabled() else "warn",
+        "state": "ok" if (_has_admin_user() or _auth_enabled()) else "warn",
         "label": "Prístup",
-        "detail": "Web UI je chránené heslom." if _auth_enabled() else "Heslo nie je nastavené. Kto sa dostane na port 8765, vidí dáta.",
+        "detail": "Web UI je chránené lokálnym správcom." if _has_admin_user() else (
+            "Web UI je chránené Basic Auth." if _auth_enabled()
+            else "Vytvor lokálny správcovský účet pred používaním."
+        ),
         "action_href": "/manage#system-status",
-        "action_label": "Skontrolované" if _auth_enabled() else "Nastaviť env",
+        "action_label": "Skontrolované" if (_has_admin_user() or _auth_enabled()) else "Vytvoriť správcu",
     })
 
     state_order = {"bad": 0, "warn": 1, "ok": 2}
@@ -861,8 +1278,9 @@ def three_month_forecast(today, months=3):
     year, month = today.year, today.month
     for _ in range(months):
         r = bp.calc_month(year, month)
+        names = MONTH_NAME_EN if current_language() == "en" else MONTH_NAME_SK
         result.append({
-            "label": f"{MONTH_NAME_SK.get(month, month)} {year}",
+            "label": f"{names.get(month, month)} {year}",
             "income_total": r["income_total"],
             "payment_total": r["payment_total"],
             "planned_month_balance": r["planned_month_balance"],
@@ -1658,4 +2076,4 @@ def setup_recurring_toggle(item_id):
     return redirect("/setup")
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8765, debug=False)
+    app.run(host=_listen_host(), port=_listen_port(), debug=False)

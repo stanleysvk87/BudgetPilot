@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""First-run setup wizard for Saldo.
+"""First-run setup wizard for BudgetPilot.
 
 Balance-first model:
 - current account balance is the source of truth
@@ -73,7 +73,7 @@ SETUP_HTML = """
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Saldo - prvé nastavenie</title>
+<title>BudgetPilot - prvé nastavenie</title>
 <style>
 :root{
   --bg:#020617; --panel:#111827; --card:#1f2937; --line:#334155;
@@ -114,6 +114,10 @@ button{
 .mini-status span{display:block;color:var(--muted);font-size:12px;margin-top:3px}
 .hint{font-size:13px;color:var(--muted)}
 .warn{color:#fbbf24}
+.language-switch{position:fixed;top:14px;right:14px;display:flex;gap:6px;z-index:2}
+.language-switch a{color:#e5e7eb;text-decoration:none;border:1px solid rgba(148,163,184,.35);
+border-radius:999px;padding:7px 10px;font-size:12px;font-weight:800;background:rgba(15,23,42,.86)}
+.language-switch a.active{background:#2563eb;border-color:#93c5fd}
 @media(max-width:760px){
   .wrap{padding:12px}
   h1{font-size:26px}
@@ -123,9 +127,13 @@ button{
 </style>
 </head>
 <body>
+<div class="language-switch" aria-label="Language">
+  <a href="/language/sk?next=/setup/full" class="{% if current_language() == 'sk' %}active{% endif %}">SK</a>
+  <a href="/language/en?next=/setup/full" class="{% if current_language() == 'en' %}active{% endif %}">EN</a>
+</div>
 <div class="wrap">
   <div class="hero">
-    <h1>Saldo - prvé nastavenie</h1>
+    <h1>BudgetPilot - prvé nastavenie</h1>
     <p>
       Začni aktuálnym stavom účtu a najväčšími pravidelnými platbami.
       Ostatné vieš doplniť neskôr, keď bude základný prehľad sedieť.
@@ -138,6 +146,7 @@ button{
   </div>
 
   <form method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div class="card">
       <h2>1. Aktuálny stav</h2>
       <div class="grid">
@@ -237,7 +246,10 @@ document.addEventListener("DOMContentLoaded", function(){
 def register_first_run_wizard(app, data_path=None, settings_path=None, payments_path=None):
     @app.before_request
     def _first_run_gate():
-        if request.endpoint in {"first_run_setup", "static"}:
+        if request.endpoint in {
+            "first_run_setup", "auth_setup", "auth_login", "logout", "logout_get",
+            "settings_restore", "set_language", "static",
+        }:
             return None
         if request.path.startswith("/static"):
             return None

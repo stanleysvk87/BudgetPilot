@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Saldo — nastavenie</title>
+<title>BudgetPilot — nastavenie</title>
 <style>
 :root{--bg:#0f172a;--card:#1f2937;--line:#374151;--text:#e5e7eb;--muted:#9ca3af;--blue:#2563eb;--red:#b91c1c;--green:#22c55e;--orange:#f59e0b}
 *{box-sizing:border-box}
@@ -28,13 +28,14 @@ a{color:white;text-decoration:none}
 <div class="wrap">
 
 <div class="card">
-<h1>Saldo</h1>
+<h1>BudgetPilot</h1>
 <div class="small">Toto vyplníš raz na začiatku a potom vždy, keď príde výplata.</div>
 </div>
 
 <div class="card">
 <h2>Deň výplaty a reálny zostatok</h2>
 <form method="post" action="/setup/balance">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 <label>Deň výplaty v mesiaci</label>
 <input name="payday_day" value="{{settings.get('payday_day','')}}" placeholder="napr. 15">
 <label>Reálny zostatok na účte teraz</label>
@@ -49,6 +50,7 @@ a{color:white;text-decoration:none}
 <div class="card">
 <h2>Pridať pravidelnú platbu</h2>
 <form method="post" action="/setup/recurring">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 <label>Názov</label><input name="name" placeholder="napr. škôlka">
 <label>Suma</label><input name="amount" placeholder="napr. 120">
 <label>Deň splatnosti v mesiaci</label><input name="due_day" placeholder="napr. 5">
@@ -78,7 +80,7 @@ a{color:white;text-decoration:none}
 <td>{% if x.get('active', True) %}<span class="badge ok">aktívna</span>{% else %}<span class="badge">zrušená</span>{% endif %}</td>
 <td class="actions">
 {% if x.get('id') %}
-<form method="post" action="/setup/recurring/toggle/{{x.get('id')}}"><button class="secondary">{% if x.get('active', True) %}Zrušiť{% else %}Obnoviť{% endif %}</button></form>
+<form method="post" action="/setup/recurring/toggle/{{x.get('id')}}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="secondary">{% if x.get('active', True) %}Zrušiť{% else %}Obnoviť{% endif %}</button></form>
 {% endif %}
 </td>
 </tr>

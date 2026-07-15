@@ -21,11 +21,13 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # for csrf_test_support
 
 import budgetpilot as bp
 import budgetpilot_web as web
 import payment_events as pe
 import balance_first_summary as bfs
+import csrf_test_support
 
 
 class AppViewsTestCase(unittest.TestCase):
@@ -73,12 +75,27 @@ class AppViewsTestCase(unittest.TestCase):
             mock.patch.object(pe, "PAYMENT_EVENTS", data / "payment_events.json"),
             mock.patch.object(bfs, "DATA", data),
             mock.patch.object(web, "run_core", return_value=""),
+            # render_page() -> three_month_forecast() calls bp.calc_month()
+            # in-process (not through the run_core subprocess stub above),
+            # so budgetpilot.py's own module-level path constants need
+            # redirecting too -- see tests/test_production_data_guard.py.
+            mock.patch.object(bp, "SETTINGS", data / "settings.json"),
+            mock.patch.object(bp, "INCOMES", data / "incomes.json"),
+            mock.patch.object(bp, "PAYMENTS", data / "payments.json"),
+            mock.patch.object(bp, "EXPENSES", data / "expenses.json"),
+            mock.patch.object(bp, "DEBTS", data / "debts.json"),
+            mock.patch.object(bp, "ONETIME", data / "onetime.json"),
         ]
         for p in patches:
             p.start()
             self.addCleanup(p.stop)
 
         web.app.config["TESTING"] = True
+        previous_auth_bypass = web.app.config.get("BUDGETPILOT_AUTH_BYPASS")
+        web.app.config["BUDGETPILOT_AUTH_BYPASS"] = True
+        self.addCleanup(web.app.config.__setitem__, "BUDGETPILOT_AUTH_BYPASS", previous_auth_bypass)
+        previous_client_class = csrf_test_support.install(web.app)
+        self.addCleanup(setattr, web.app, "test_client_class", previous_client_class)
         self.client = web.app.test_client()
 
     def _cycle(self):
@@ -102,6 +119,7 @@ class RouteStatusTests(AppViewsTestCase):
 
     def test_basic_auth_is_required_when_password_env_is_set(self):
         with mock.patch.dict(os.environ, {"BUDGETPILOT_PASSWORD": "tajne", "BUDGETPILOT_USER": "saldo"}):
+            web.app.config["BUDGETPILOT_AUTH_BYPASS"] = False
             response = self.client.get("/")
             self.assertEqual(response.status_code, 401)
             self.assertIn("Basic", response.headers["WWW-Authenticate"])
@@ -198,7 +216,7 @@ class DashboardIsSummaryOnlyTests(AppViewsTestCase):
     def test_views_render_app_shell_header_and_layout_class(self):
         html = self.client.get("/payments").data.decode()
         self.assertIn('class="app app-payments"', html)
-        self.assertIn("Saldo · cyklus", html)
+        self.assertIn("BudgetPilot · cyklus", html)
         self.assertIn("Pracovný zoznam povinností", html)
         self.assertNotIn("Akcie a formuláre", html)
 
