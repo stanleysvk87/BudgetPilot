@@ -14,7 +14,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from paths import app_base, data_dir  # noqa: E402
+from paths import app_base, data_dir, guard_against_production_dir  # noqa: E402
 
 
 def _has_runtime_data(path: Path) -> bool:
@@ -24,6 +24,13 @@ def _has_runtime_data(path: Path) -> bool:
 def main() -> int:
     source = ROOT / "data.example"
     target = data_dir()
+
+    # This script writes with shutil, not json_store, so it doesn't get
+    # json_store's guard_against_production_dir() call for free -- call it
+    # explicitly. It's a no-op for a normal manual run (see paths.py); it
+    # only fires if this script is ever invoked from a test/verification
+    # harness without BUDGETPILOT_HOME redirected to an isolated directory.
+    guard_against_production_dir(target)
 
     if not source.exists():
         print(f"Demo data not found: {source}", file=sys.stderr)

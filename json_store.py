@@ -16,6 +16,8 @@ import os
 import uuid
 from pathlib import Path
 
+import paths
+
 _log = logging.getLogger(__name__)
 
 
@@ -31,6 +33,7 @@ def read_json(path, default):
       a damaged data file must degrade the feature it belongs to, not
       crash the whole application.
     """
+    paths.guard_against_production_dir(path)
     path = Path(path)
     if not path.exists():
         return default
@@ -54,6 +57,7 @@ def atomic_write_json(path, data):
     atomically replace `path`, and fsync the containing directory so the
     rename itself survives a crash/power loss, not just the file bytes.
     """
+    paths.guard_against_production_dir(path)
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
