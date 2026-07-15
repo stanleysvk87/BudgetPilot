@@ -8,11 +8,14 @@ Use this before pushing BudgetPilot to a public remote or making a release.
 git status --short
 python3 -m unittest discover -s tests
 python3 -m py_compile budgetpilot.py budgetpilot_web.py first_run_wizard.py
+npm run test:e2e
+npm run review:chromium
 ```
 
 - `git status --short` should be clean, except for changes you intend to
   commit.
 - Tests should pass without skipped demo-data assumptions.
+- Chromium E2E and visual review should pass on synthetic data.
 - Runtime data should not be staged or committed.
 - After pushing to GitHub, the `Tests` GitHub Actions workflow should pass.
 
@@ -66,15 +69,15 @@ Check these files after any behavior change:
 
 ## Demo Screenshots
 
-Only capture screenshots after loading fake data:
+Only capture screenshots from isolated synthetic data:
 
 ```bash
-python3 scripts/load_demo_data.py
-python3 budgetpilot_web.py
+npm run screenshots:public
 ```
 
-Then inspect every screenshot before committing it. It must show fake
-numbers from `data.example/`, never live household data.
+Then inspect every screenshot before committing it. It must show fake numbers
+and no usernames, passwords, tokens, terminal output, local paths, LAN IPs, or
+real household data.
 
 ## Legacy Files
 
@@ -86,12 +89,13 @@ smallest possible public tree.
 
 ## Security Position
 
-BudgetPilot/Saldo has optional HTTP Basic Auth via `BUDGETPILOT_PASSWORD`,
-but no CSRF protection or public-internet hardening. Public release notes
-should say plainly:
+BudgetPilot has a first-run local administrator account, CSRF protection,
+security headers, and optional Basic Auth compatibility via
+`BUDGETPILOT_PASSWORD`. It is still not a public-internet application.
+Public release notes should say plainly:
 
 - run it only on a trusted LAN or behind a VPN
-- set `BUDGETPILOT_PASSWORD` on shared networks
+- create the local administrator account before entering real data
 - do not port-forward it
 - do not expose it through a public tunnel
 - remote access should use WireGuard/Tailscale or equivalent private VPN

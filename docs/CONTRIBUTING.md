@@ -30,6 +30,22 @@ keep contributions in that spirit.
   [docs/monthly_cycle.md](monthly_cycle.md) in the same change — these
   documents are meant to describe the actual current behavior, not the
   original design intent.
+- **Never let a test, verification, migration, or diagnostic script touch
+  the live `data/` directory.** Real household payments/payment_events
+  data was lost this way in July 2026. Every module that reads or writes
+  a data file goes through `json_store.read_json()`/`atomic_write_json()`,
+  and both call `paths.guard_against_production_dir()` first — this
+  aborts immediately (raising `paths.ProductionDataGuardError`) if a
+  test/verification/migration/diagnostic run is about to touch the real
+  `~/BudgetPilot/data`. It's a permanent, always-on safety net, not
+  something to configure per change. New tests and one-off scripts should
+  isolate themselves with `paths.isolated_runtime_dir()` (or the existing
+  `tempfile.TemporaryDirectory()` + `mock.patch.object(module, "DATA", ...)`
+  pattern already used throughout `tests/`) rather than relying on it as a
+  first line of defense — it exists to catch the mistake, not to be routinely
+  triggered. See [ARCHITECTURE.md](ARCHITECTURE.md#test-isolation-and-the-production-data-guard)
+  for how it's wired up, and `tests/test_production_data_guard.py` for the
+  regression tests that pin this behavior down.
 
 ## Before submitting a change
 

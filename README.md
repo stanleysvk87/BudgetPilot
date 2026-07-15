@@ -1,6 +1,6 @@
 # BudgetPilot
 
-BudgetPilot is a small, local-first household **forward-cashflow** app. It
+BudgetPilot is a privacy-focused, self-hosted household **forward-cashflow** app. It
 answers one question: *between now and my next payday, what still has to
 happen to my account balance, and how much can I actually spend?*
 
@@ -28,9 +28,9 @@ tracks what's still coming:
 - **Receipt OCR is local/offline and optional.** Photo upload uses
   Tesseract when installed, then always requires manual review before an
   expense is saved. See [`docs/receipt_ocr.md`](docs/receipt_ocr.md).
-- **Optional local password.** Set `BUDGETPILOT_PASSWORD` to protect the web
-  UI with HTTP Basic Auth. Without it, the app is for trusted LAN use only.
-  See [`docs/SECURITY.md`](docs/SECURITY.md).
+- **Local administrator login.** On first launch, create the local admin
+  account. Optional Basic Auth remains for existing deployments. See
+  [`docs/SECURITY.md`](docs/SECURITY.md).
 
 ## Main features
 
@@ -41,6 +41,13 @@ tracks what's still coming:
   month to month until cancelled
 - Payday balance snapshot as the source of truth for each new cycle
 - Manual expense log
+- Monthly envelopes for planned flexible spending
+- Local/offline receipt OCR review flow when optional OCR dependencies are
+  installed
+- Local administrator login, with optional Basic Auth compatibility for
+  existing trusted LAN deployments
+- Slovak and English web UI with a visible language switcher and persisted
+  browser preference
 - Both a CLI (`budgetpilot.py`) and a Flask web dashboard
   (`budgetpilot_web.py`) reachable from other devices on your LAN (e.g. a
   phone)
@@ -48,9 +55,22 @@ tracks what's still coming:
 ## Current project status
 
 Active MVP under development. The forecast engine, payment-state model,
-envelopes, debts, receipt review flow, and multi-month forecast are
-implemented and unit-tested. See [`docs/ROADMAP.md`](docs/ROADMAP.md) for
-what's next.
+envelopes, debts, receipt review flow, first-run setup, CSRF protection, and
+multi-month forecast are implemented and unit-tested. See
+[`docs/ROADMAP.md`](docs/ROADMAP.md) for what's next.
+
+## Deployment safety
+
+Publishing the source code on GitHub is different from safely exposing a
+running BudgetPilot instance. A live instance contains personal financial
+data and write actions.
+
+BudgetPilot now requires a local administrator account on first launch and
+protects financial pages by default, but the supported deployment model for
+the first public release is still **localhost, trusted LAN, or private VPN
+/ Tailscale access**. Do not expose it directly to the public internet.
+HTTPS, Docker, or a reverse proxy are useful transport/deployment tools, but
+they are not a substitute for authentication and network access control.
 
 Older Tkinter GUI prototypes and one-off patch scripts live in `legacy/`
 for history; the supported way to use BudgetPilot today is the CLI and the
@@ -66,8 +86,16 @@ can inspect, back up, or edit the data files directly with a text editor.
 
 ## Screenshots
 
-*(not yet captured — the web dashboard is at `http://localhost:8765` once
-running; add screenshots here once available)*
+Screenshots must be captured from sanitized demo data only. The public
+documentation set is generated from an isolated synthetic runtime:
+
+```bash
+npm install
+npx playwright install chromium
+npm run screenshots:public
+```
+
+Generated screenshots live in `docs/assets/screenshots/`.
 
 ## Quick start
 
@@ -75,14 +103,14 @@ Requires Python 3.10+. Flask is needed for the web UI; `pytesseract` and
 Pillow are optional for receipt OCR.
 
 ```bash
-git clone <this-repo>
+git clone https://github.com/stanleysvk87/BudgetPilot.git
 cd BudgetPilot
 pip install -r requirements.txt
 ```
 
-On a fresh install, BudgetPilot will start at the first-run setup flow. To
-try the fake demo numbers instead, run `python3 scripts/load_demo_data.py`
-before starting the app.
+On a fresh install, BudgetPilot will start with local administrator creation,
+then financial setup. To try the fake demo numbers instead, run
+`python3 scripts/load_demo_data.py` before starting the app.
 
 ### Run the CLI
 
@@ -105,13 +133,42 @@ python3 budgetpilot_web.py
 
 Open `http://localhost:8765` in a browser.
 
+### Run with Docker
+
+```bash
+cp .env.example .env
+docker compose up --build
+```
+
+Open `http://localhost:8765`. The provided Compose file stores the
+container's persistent runtime home in a named Docker volume and binds the port to `127.0.0.1` by
+default. On first launch, create the local administrator account in the
+browser. See [docs/DOCKER.md](docs/DOCKER.md) before enabling LAN access.
+
+### Configuration
+
+BudgetPilot works without environment variables. Optional settings:
+
+- `BUDGETPILOT_HOME` — runtime home; data is stored in
+  `$BUDGETPILOT_HOME/data`. If unset, the historical default is
+  `~/BudgetPilot/data`.
+- `BUDGETPILOT_PASSWORD` — enables HTTP Basic Auth for the web UI.
+- `BUDGETPILOT_USER` — Basic Auth username. The default remains `saldo` for
+  compatibility. New installations should use the first-run local
+  administrator account instead of relying on Basic Auth alone.
+
+Copy `.env.example` only as a starting point for private local configuration.
+Do not commit real credentials.
+
 ### Open it from another device on your LAN (e.g. your phone)
 
-The web server already binds to `0.0.0.0`, so it's reachable from other
-devices on the same network. Find your computer's LAN IP
+Native runs default to `0.0.0.0:8765` for historical compatibility, while
+Docker Compose binds to `127.0.0.1` on the host by default. Find your
+computer's LAN IP
 (`ip addr` / `hostname -I` on Linux) and open
 `http://<your-lan-ip>:8765` from your phone or another computer on the same
-Wi-Fi. Do not port-forward this to the public internet — see
+Wi-Fi only after creating the local administrator account and confirming the
+network is trusted. Do not port-forward this to the public internet — see
 [`docs/SECURITY.md`](docs/SECURITY.md).
 
 ### Run the tests
@@ -119,6 +176,18 @@ Wi-Fi. Do not port-forward this to the public internet — see
 ```bash
 python3 -m unittest discover -s tests
 ```
+
+Browser tests and visual review require Node and Playwright:
+
+```bash
+npm install
+npx playwright install chromium
+npm run test:e2e
+npm run review:chromium
+```
+
+See [docs/BROWSER_TESTING.md](docs/BROWSER_TESTING.md) for headed mode,
+environment variables, screenshot capture, and cleanup.
 
 ## Project structure
 
@@ -141,11 +210,14 @@ legacy/                  Older Tkinter prototypes and one-off patch scripts
 
 - [docs/QUICKSTART.md](docs/QUICKSTART.md) — fastest path to running it
 - [docs/INSTALL.md](docs/INSTALL.md) — Python/Flask setup, troubleshooting
+- [docs/DOCKER.md](docs/DOCKER.md) — Docker Compose setup and backup notes
 - [docs/USAGE.md](docs/USAGE.md) — first-run setup, payday snapshots, states
 - [docs/DATA_MODEL.md](docs/DATA_MODEL.md) — the JSON files explained
 - [docs/CASHFLOW_LOGIC.md](docs/CASHFLOW_LOGIC.md) — the forecast rules in
   plain language
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — how the pieces fit together
+- [docs/LOCALIZATION.md](docs/LOCALIZATION.md) — Slovak/English localization and adding languages
+- [docs/BROWSER_TESTING.md](docs/BROWSER_TESTING.md) — Playwright/Chromium tests and screenshots
 - [docs/ROADMAP.md](docs/ROADMAP.md) — what's built, what's next
 - [docs/PRIVACY.md](docs/PRIVACY.md) — what data BudgetPilot keeps and where
 - [docs/SECURITY.md](docs/SECURITY.md) — LAN-only assumptions and optional password protection
@@ -165,11 +237,17 @@ Deeper technical notes on the current rule set already exist in
   [docs/PRIVACY.md](docs/PRIVACY.md)).
 - Nothing in this project sends data anywhere. There is no analytics, no
   telemetry, no third-party API call.
-- Set `BUDGETPILOT_PASSWORD` before using the web UI on a shared network.
-  Without it, anyone who can reach the web UI's address can view and edit
-  your data. Keep it off the public internet; use a VPN
-  (WireGuard/Tailscale) for remote access instead.
+- Create the first-run administrator account before entering financial data.
+  Keep the application off the public internet; use a VPN (WireGuard or
+  Tailscale) for remote access instead.
+
+## Language support
+
+The web UI supports Slovak and English. Slovak is the source/fallback
+language; English is provided through `translations/en.json`. The selected
+language is persisted in the browser. See
+[docs/LOCALIZATION.md](docs/LOCALIZATION.md).
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+Apache License 2.0 — see [LICENSE](LICENSE).

@@ -32,19 +32,69 @@ pip install --user -r requirements.txt
 ## Running
 
 ```bash
-python3 budgetpilot.py           # CLI
-python3 budgetpilot_web.py       # web UI, http://localhost:8765
-python3 -m unittest discover -s tests   # tests
+BUDGETPILOT_HOME="$PWD/.local-runtime" python3 budgetpilot.py
+BUDGETPILOT_HOME="$PWD/.local-runtime" BUDGETPILOT_HOST=127.0.0.1 BUDGETPILOT_PORT=8765 python3 budgetpilot_web.py
+python3 -m unittest discover -s tests
 ```
+
+On first web launch, create the local administrator account. There is no
+default password.
+
+## Native Linux deployment layout
+
+For a persistent native Linux installation, use separate application,
+configuration, and data directories:
+
+- application files: `/opt/budgetpilot`
+- runtime data and backups: `/var/lib/budgetpilot`
+- private environment file: `/etc/budgetpilot/budgetpilot.env`
+- logs: systemd journal, or `/var/log/budgetpilot` if you add file logging
+
+BudgetPilot does not hard-code these paths. Point it at the runtime data
+directory with `BUDGETPILOT_HOME=/var/lib/budgetpilot`.
+
+Example:
+
+```bash
+sudo mkdir -p /opt/budgetpilot /var/lib/budgetpilot /etc/budgetpilot
+sudo chown "$USER":"$USER" /opt/budgetpilot /var/lib/budgetpilot
+
+cd /opt/budgetpilot
+git clone https://github.com/stanleysvk87/BudgetPilot.git .
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+
+cp .env.example /etc/budgetpilot/budgetpilot.env
+```
+
+Edit `/etc/budgetpilot/budgetpilot.env` for native service use:
+
+```bash
+BUDGETPILOT_HOME=/var/lib/budgetpilot
+BUDGETPILOT_HOST=127.0.0.1
+BUDGETPILOT_PORT=8765
+BUDGETPILOT_COOKIE_SECURE=false
+BUDGETPILOT_PROXY_FIX=false
+```
+
+Then run:
+
+```bash
+set -a
+. /etc/budgetpilot/budgetpilot.env
+set +a
+/opt/budgetpilot/.venv/bin/python /opt/budgetpilot/budgetpilot_web.py
+```
+
+For a persistent native service, use the provided systemd unit, which runs
+Gunicorn instead of Flask's development server.
 
 ## Running on Linux as a background service
 
-A user-level systemd unit is the recommended way to keep the web UI running
-persistently without root — see `deploy/budgetpilot.service` and
-`deploy/README.md` for a ready-to-copy unit file and setup steps
-(`systemctl --user enable --now budgetpilot.service`, with `loginctl
-enable-linger $USER` so it survives logout). Without that, a terminal,
-`tmux`/`screen` session, or `nohup python3 budgetpilot_web.py &` also work.
+A systemd unit is the recommended way to keep the web UI running
+persistently. See `deploy/budgetpilot.service` and `deploy/README.md` for a
+portable example. Without systemd, a terminal, `tmux`/`screen` session, or a
+supervisor such as `supervisord` can run the same command.
 
 ## Troubleshooting
 
@@ -53,7 +103,7 @@ Flask isn't installed in the Python environment you're running with —
 install it (see above) or activate your virtualenv first.
 
 **Web UI isn't reachable from my phone**
-`budgetpilot_web.py` binds to `0.0.0.0:8765`, so it should be reachable at
+If `BUDGETPILOT_HOST=0.0.0.0`, the web UI should be reachable at
 `http://<your-computer's-LAN-IP>:8765`. Check:
 - your phone is on the same Wi-Fi network as the computer
 - no firewall on the computer is blocking port 8765
@@ -68,5 +118,5 @@ longer the reset path.
 
 **Port 8765 already in use**
 Another process is using it, or a previous `budgetpilot_web.py` run is still
-alive — find and stop it (`lsof -i :8765` on Linux), or edit the
-`app.run(..., port=8765, ...)` line at the bottom of `budgetpilot_web.py`.
+alive — find and stop it (`lsof -i :8765` on Linux), or set
+`BUDGETPILOT_PORT` to another port.

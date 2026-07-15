@@ -2,14 +2,25 @@
 
 ## First-run setup
 
-BudgetPilot needs a **payday day of month** and a **real account balance**
-before it can forecast reliably. Until both are set, the dashboard (`/`)
-shows a banner linking to `/setup`. The dashboard itself still works while
-setup is incomplete — it's not a blocking wizard.
+On a fresh runtime data directory, BudgetPilot starts with two required
+browser steps:
 
-At `/setup` you can:
+1. `/auth/setup` — create the first local administrator account. There is no
+   default username or password.
+2. `/setup/full` — enter the starting account balance, optional reserve, and
+   at least one recurring payment template so the forecast has real
+   obligations to work with.
 
-- enter your real current balance and an optional reserve amount
+The initial financial wizard is blocking for a new install: financial pages
+redirect to it until `data/settings.json` has a balance and
+`data/payments.json` has at least one payment. Income and payday date are
+optional in this first wizard because BudgetPilot's primary model is
+balance-first forward cashflow.
+
+After the first run is complete, `/setup` remains available for ongoing
+maintenance. At `/setup` you can:
+
+- update your real current balance and optional reserve amount
 - set the payday day of month
 - add recurring monthly obligations (name, amount, due day, priority,
   flexibility)

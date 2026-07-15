@@ -4,6 +4,26 @@ Human-readable summary of the project's major changes. All dates 2026-07-09
 (the revival happened in a single day's work session, building on an older,
 previously non-git-tracked local project) except where noted.
 
+## `v0.1.0` — Initial public MVP (2026-07-16)
+
+First public release candidate for BudgetPilot as a local-first household
+forward-cashflow app.
+
+- Flask web dashboard and CLI forecast over local JSON files.
+- First-run local administrator setup, login/logout, CSRF protection,
+  security headers, and optional Basic Auth compatibility.
+- Balance-first setup wizard, payday balance snapshots, recurring payments,
+  one-time obligations, debts, manual expenses, envelopes, and local receipt
+  OCR review flow.
+- Slovak and English web UI with persisted language preference.
+- Docker Compose deployment, native Linux systemd example, `.env.example`,
+  backup/update instructions, and public release documentation.
+- Worker-safe persisted session-secret creation so multi-worker Gunicorn
+  starts on a fresh runtime keep CSRF/session cookies valid.
+- Standard-library unit test suite plus Playwright Chromium E2E, visual
+  review, and sanitized screenshot capture.
+- Apache License 2.0, copyright 2026 Stanislav Hambalko.
+
 ## `a76f595` — Add debts and one-time obligations UI, wired into the forecast (2026-07-10)
 
 Debts: `obligations.set_debt_state()` (new) validates state transitions per
@@ -49,13 +69,31 @@ so the cashflow summary renders above the income/settings tables, added a
 sticky nav bar, and moved main content ahead of the sidebar on mobile.
 87 tests total.
 
-## Unreleased — documentation and public-release cleanup
+## Public-release cleanup (included in `v0.1.0`)
 
 - Added README.md, docs/ (QUICKSTART, INSTALL, USAGE, DATA_MODEL,
   CASHFLOW_LOGIC, ARCHITECTURE, ROADMAP, PRIVACY, SECURITY, CONTRIBUTING),
   LICENSE, and this changelog.
 - Expanded `.gitignore` for virtualenvs, local env files, and `backups/`.
-- No application logic, data model, or feature changes in this pass.
+- Added Docker/native deployment files and release-readiness documentation.
+
+## Slovak/English localization and Chromium release review (included in `v0.1.0`)
+
+- Added dependency-free Slovak/English localization with JSON catalogs,
+  fallback behavior, visible language switcher, and persisted language cookie.
+- Localized authentication/setup pages, navigation, statuses, validation
+  messages, warnings, empty states, dashboard/payment/expense/manage labels,
+  and browser-side confirmation copy.
+- Added localization tests and Playwright Chromium end-to-end tests for
+  first-run setup, login/logout, protected redirects, financial actions,
+  language switching, mobile navigation, validation, and destructive-action
+  confirmation.
+- Added automated Chromium visual review across desktop, laptop, tablet,
+  mobile portrait, mobile landscape, and narrow mobile widths.
+- Added sanitized public screenshots generated from synthetic data under
+  `docs/assets/screenshots/`.
+- Fixed auth-page CSS injection, tablet `/manage` action overflow, small
+  clickable targets, and English forecast status labels.
 
 ## `f71ee3e` — Expose payment states in web UI and reset to clean demo data
 

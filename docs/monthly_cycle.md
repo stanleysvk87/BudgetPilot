@@ -7,14 +7,20 @@ obligations, and the payday balance snapshot.
 
 ## First-run setup
 
-BudgetPilot needs two things before it can forecast reliably: a **payday
-day of month** and a **real account balance**. Until both are set,
-`needs_setup()` (in `obligations.py`) returns `True` and the dashboard
-shows a banner linking to `/setup`.
+BudgetPilot needs two things before a fresh install can forecast reliably:
+a **real account balance** and at least one **payment template**. The first
+browser session therefore starts with `/auth/setup` for the local
+administrator account, then redirects to the blocking `/setup/full`
+financial wizard.
 
-This is intentionally *not* a blocking wizard — the existing dashboard
-(`/`) keeps working even while setup is incomplete, so a household with
-data already entered isn't locked out. `/setup` lets you:
+`first_run_wizard._needs_first_run()` gates requests to `/setup/full`
+whenever `settings.json` has neither `account_balance` nor `real_balance`,
+or `payments.json` is empty. Income and payday day are deliberately not
+part of that first-run gate; this is a balance-first app and can be useful
+without an income schedule.
+
+After initial setup, `/setup` remains the ongoing maintenance page. It lets
+you:
 
 - enter the real current balance and an optional reserve amount
 - set the payday day of month
@@ -142,7 +148,8 @@ you type in on payday wins, always.
 - No AI.
 - Receipt OCR is optional and local-only.
 - No cloud sync — everything lives in local JSON files.
-- Optional Basic Auth is available via `BUDGETPILOT_PASSWORD`; without it,
-  the app is for trusted LAN use only.
+- First-run local administrator login protects financial pages by default.
+  Optional Basic Auth remains available via `BUDGETPILOT_PASSWORD` for
+  existing deployments, but direct public-internet exposure is not supported.
 - No database — the data model stays small, backwards-compatible JSON
   until the current approach actually can't keep up.
