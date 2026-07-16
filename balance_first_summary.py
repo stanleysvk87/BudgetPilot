@@ -366,6 +366,15 @@ def build_balance_first_summary() -> dict:
         if isinstance(e, dict) and _expense_month(e) == cycle and _expense_amount(e) > 0
     ]
 
+    # Each expense counts toward at most one envelope: _expense_matches_envelope
+    # is a substring/alias match, so a single expense's text (e.g. "nafta v
+    # Kauflande") can satisfy more than one envelope's pattern. Summing every
+    # matching envelope independently would count that expense's amount more
+    # than once in envelope_spent_total/envelope_remaining_total below, which
+    # feed directly into the dashboard's real-balance estimate. First envelope
+    # (in list order) that matches claims the expense; later envelopes skip it.
+    claimed_expense_indexes = set()
+
     for env in envelopes:
         if not isinstance(env, dict):
             continue
@@ -377,11 +386,13 @@ def build_balance_first_summary() -> dict:
             continue
 
         name = str(env.get("name") or env.get("category") or "Obálka")
-        spent = sum(
-            _expense_amount(exp)
-            for exp in current_expenses
-            if _expense_matches_envelope(exp, name)
-        )
+        spent = 0.0
+        for idx, exp in enumerate(current_expenses):
+            if idx in claimed_expense_indexes:
+                continue
+            if _expense_matches_envelope(exp, name):
+                spent += _expense_amount(exp)
+                claimed_expense_indexes.add(idx)
 
         remaining = max(budget - spent, 0.0)
         over = max(spent - budget, 0.0)

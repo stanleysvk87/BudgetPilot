@@ -51,7 +51,8 @@ def occurs(item, year, month):
     return is_recurring_active(item, year, month)
 
 def due_date(item, year, month):
-    return date(year, month, min(int(item.get("day", 1)), month_days(year, month)))
+    day = max(1, min(int(item.get("day", 1)), month_days(year, month)))
+    return date(year, month, day)
 
 def next_income_date_all(incomes):
     dates = []

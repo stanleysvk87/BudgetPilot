@@ -57,6 +57,7 @@ class AuthTestCase(unittest.TestCase):
             mock.patch.object(web, "ONETIME", self.data / "onetime.json"),
             mock.patch.object(web, "ENVELOPES", self.data / "envelopes.json"),
             mock.patch.object(web, "AUDIT_LOG_PATH", self.data / "audit_log.json"),
+            mock.patch.object(web, "LOGIN_LOCKOUT_PATH", self.data / "login_lockout.json"),
             mock.patch.object(web, "RECEIPTS_DIR", self.data / "receipts"),
             mock.patch.object(pe, "PAYMENT_EVENTS", self.data / "payment_events.json"),
             mock.patch.object(bfs, "DATA", self.data),

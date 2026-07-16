@@ -149,8 +149,7 @@ CSRF_FORM_FIELD = "csrf_token"
 CSRF_HEADER = "X-CSRF-Token"
 AUTH_SESSION_KEY = "budgetpilot_admin"
 LOGIN_NEXT_SESSION_KEY = "budgetpilot_login_next"
-LOGIN_ATTEMPT_SESSION_KEY = "budgetpilot_login_attempts"
-LOGIN_LOCK_UNTIL_SESSION_KEY = "budgetpilot_login_lock_until"
+LOGIN_LOCKOUT_PATH = DATA / "login_lockout.json"
 MAX_LOGIN_ATTEMPTS = 5
 LOGIN_LOCK_SECONDS = 300
 
@@ -232,7 +231,7 @@ CSRF_ERROR_HTML = """<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>BudgetPilot - bezpečnostná kontrola zlyhala</title>
 <style>
-body{{font-family:system-ui,-apple-system,sans-serif;background:#0f172a;color:#e5e7eb;
+body{{font-family:system-ui,-apple-system,sans-serif,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji","Segoe UI Symbol";background:#0f172a;color:#e5e7eb;
      max-width:640px;margin:60px auto;padding:0 20px;line-height:1.5}}
 h1{{font-size:22px}}
 a{{color:#60a5fa}}
@@ -353,24 +352,55 @@ def _basic_auth_challenge():
         {"WWW-Authenticate": 'Basic realm="BudgetPilot", charset="UTF-8"'},
     )
 
+def _login_lockout_key():
+    # Keyed by client IP, not the session cookie: a session is something
+    # the client controls and can simply drop between requests, which
+    # would reset an attempt counter stored there back to zero on every
+    # try -- defeating the lockout entirely. IP isn't perfect (shared
+    # NAT/proxy), but it can't be reset by the client at will, which a
+    # cookie-based counter could.
+    return request.remote_addr or "unknown"
+
+def _read_login_lockouts():
+    data = json_store.read_json(LOGIN_LOCKOUT_PATH, {})
+    return data if isinstance(data, dict) else {}
+
 def _login_locked():
-    lock_until = float(session.get(LOGIN_LOCK_UNTIL_SESSION_KEY, 0) or 0)
-    return lock_until > datetime.now().timestamp()
+    entry = _read_login_lockouts().get(_login_lockout_key())
+    if not entry:
+        return False
+    return float(entry.get("lock_until", 0) or 0) > datetime.now().timestamp()
 
 def _record_failed_login():
-    attempts = int(session.get(LOGIN_ATTEMPT_SESSION_KEY, 0) or 0) + 1
-    session[LOGIN_ATTEMPT_SESSION_KEY] = attempts
+    now = datetime.now().timestamp()
+    lockouts = _read_login_lockouts()
+    key = _login_lockout_key()
+    # Prune only entries whose lock has fully expired, so this file can't
+    # grow unbounded -- an entry that hasn't been locked yet (still under
+    # MAX_LOGIN_ATTEMPTS) must survive this, or its attempt count would
+    # reset to zero on every single failed try, defeating the lockout the
+    # same way the old session-based counter did.
+    lockouts = {
+        k: v for k, v in lockouts.items()
+        if not v.get("lock_until") or float(v["lock_until"]) > now
+    }
+    entry = lockouts.get(key, {"attempts": 0})
+    attempts = int(entry.get("attempts", 0) or 0) + 1
+    new_entry = {"attempts": attempts}
     if attempts >= MAX_LOGIN_ATTEMPTS:
-        session[LOGIN_LOCK_UNTIL_SESSION_KEY] = datetime.now().timestamp() + LOGIN_LOCK_SECONDS
+        new_entry["lock_until"] = now + LOGIN_LOCK_SECONDS
+    lockouts[key] = new_entry
+    json_store.atomic_write_json(LOGIN_LOCKOUT_PATH, lockouts)
 
 def _clear_login_failures():
-    session.pop(LOGIN_ATTEMPT_SESSION_KEY, None)
-    session.pop(LOGIN_LOCK_UNTIL_SESSION_KEY, None)
+    lockouts = _read_login_lockouts()
+    if lockouts.pop(_login_lockout_key(), None) is not None:
+        json_store.atomic_write_json(LOGIN_LOCKOUT_PATH, lockouts)
 
 AUTH_PAGE_CSS = """
 body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
 background:radial-gradient(circle at top left,#1e3a8a 0,#0f172a 38%,#020617 100%);
-color:#e5e7eb;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+color:#e5e7eb;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji","Segoe UI Symbol"}
 .card{width:min(480px,calc(100vw - 28px));background:rgba(15,23,42,.94);
 border:1px solid rgba(148,163,184,.22);border-radius:20px;padding:22px;
 box-shadow:0 24px 80px rgba(0,0,0,.38)}
@@ -538,7 +568,7 @@ register_balance_first_summary(app)
 from envelope_editor import register_envelope_editor
 register_envelope_editor(app)
 
-from first_run_wizard import register_first_run_wizard
+from first_run_wizard import register_first_run_wizard, _to_float, _to_int
 register_first_run_wizard(
     app,
     data_path=lambda: DATA,
@@ -1564,9 +1594,9 @@ def api_payment_action_impact():
 def settings_save():
     settings = load(SETTINGS, {"account_balance":0,"use_reserve":False,"safe_min":0})
     updates = {
-        "account_balance": float(request.form.get("account_balance",0) or 0),
+        "account_balance": _to_float(request.form.get("account_balance"), 0),
         "use_reserve": bool(request.form.get("use_reserve")),
-        "safe_min": float(request.form.get("safe_min",0) or 0),
+        "safe_min": _to_float(request.form.get("safe_min"), 0),
     }
     save(SETTINGS, ob.merge_settings(settings, updates))
     return go_home()
@@ -1630,7 +1660,7 @@ def income_add():
     amount = request.form.get("amount","").strip()
     if amount:
         data = load(INCOMES, [])
-        data.append({"name":request.form.get("name","Výplata"),"amount":float(amount),"day":int(request.form.get("day",1) or 1),"frequency":"monthly","start":"2026-01-01"})
+        data.append({"name":request.form.get("name","Výplata"),"amount":_to_float(amount),"day":_to_int(request.form.get("day"), 1),"frequency":"monthly","start":"2026-01-01"})
         save(INCOMES, data)
     return go_home()
 
@@ -1638,7 +1668,7 @@ def income_add():
 def income_update(i):
     data = load(INCOMES, [])
     if i < len(data):
-        data[i].update({"name":request.form.get("name","Výplata"),"amount":float(request.form.get("amount",0) or 0),"day":int(request.form.get("day",1) or 1)})
+        data[i].update({"name":request.form.get("name","Výplata"),"amount":_to_float(request.form.get("amount"), 0),"day":_to_int(request.form.get("day"), 1)})
     save(INCOMES, data)
     return go_home()
 
@@ -1657,14 +1687,14 @@ def make_payment_from_form():
     typ = request.form.get("type","Iné")
     name = request.form.get("name","").strip() if typ == "Iné" else typ
     if not name: name = "Iné"
-    day = int(request.form.get("day",1) or 1)
-    month = int(request.form.get("month",1) or 1)
-    year = int(request.form.get("year",2026) or 2026)
+    day = _to_int(request.form.get("day"), 1)
+    month = max(1, min(12, _to_int(request.form.get("month"), 1, max_value=12)))
+    year = _to_int(request.form.get("year"), 2026, max_value=9999)
     freq = request.form.get("frequency","monthly")
     start = f"{year:04d}-{month:02d}-{day:02d}"
     item = {
         "name": name,
-        "amount": float(request.form.get("amount",0) or 0),
+        "amount": _to_float(request.form.get("amount"), 0),
         "day": day,
         "due_day": day,
         "frequency": freq,
@@ -1672,7 +1702,7 @@ def make_payment_from_form():
         "start_month": start[:7],
     }
     if freq == "custom_months":
-        item["every_months"] = int(request.form.get("every_months",1) or 1)
+        item["every_months"] = _to_int(request.form.get("every_months"), 1, max_value=9999)
     return item
 
 @app.post("/payment/add")
@@ -1797,7 +1827,7 @@ def expense_add():
         merchant = request.form.get("merchant", "").strip()
         item = {
             "name": name,
-            "amount": float(amount),
+            "amount": _to_float(amount),
             "date": _parse_expense_date(request.form.get("date")),
             "source": receipts.SOURCE_MANUAL,
         }
@@ -1815,7 +1845,7 @@ def expense_update(i):
     if i < len(data):
         updates = {
             "name": request.form.get("name","Výdavok"),
-            "amount": float(request.form.get("amount",0) or 0),
+            "amount": _to_float(request.form.get("amount"), 0),
             "date": _parse_expense_date(request.form.get("date")),
         }
         data[i] = {**data[i], **updates}
@@ -1835,7 +1865,7 @@ def envelope_add():
     limit_raw = request.form.get("monthly_limit", "").strip()
     if category and limit_raw:
         data = load(ENVELOPES, [])
-        limit = float(limit_raw)
+        limit = _to_float(limit_raw)
         for e in data:
             if e.get("category") == category:
                 e["monthly_limit"] = limit
@@ -1862,7 +1892,7 @@ def debt_add():
         data.append({
             "id": uuid.uuid4().hex[:8],
             "name": name,
-            "amount": float(amount),
+            "amount": _to_float(amount),
             "direction": direction,
             "due_date": request.form.get("due_date", date.today().isoformat()),
             "state": PENDING,
@@ -1900,7 +1930,7 @@ def onetime_add():
         data.append({
             "id": uuid.uuid4().hex[:8],
             "name": name,
-            "amount": float(amount),
+            "amount": _to_float(amount),
             "due_date": due_date_raw,
             "priority": request.form.get("priority", "mandatory"),
             "flexibility": "hard_due",
@@ -1994,7 +2024,7 @@ def receipt_confirm():
     }
     confirmed = {
         "name": request.form.get("name", "Iné"),
-        "amount": float(amount),
+        "amount": _to_float(amount),
         "date": request.form.get("date", date.today().isoformat()),
     }
     receipt_id = request.form.get("receipt_id") or None
@@ -2021,8 +2051,8 @@ def setup_page():
 @app.post("/setup/balance")
 def setup_balance():
     settings = load(SETTINGS, {"account_balance": 0, "use_reserve": False, "safe_min": 0})
-    real_balance = float(request.form.get("real_balance", 0) or 0)
-    reserve_amount = float(request.form.get("reserve_amount", 0) or 0)
+    real_balance = _to_float(request.form.get("real_balance"), 0)
+    reserve_amount = _to_float(request.form.get("reserve_amount"), 0)
     payday_raw = request.form.get("payday_day", "").strip()
 
     settings["real_balance"] = real_balance
@@ -2031,7 +2061,7 @@ def setup_balance():
     settings["safe_min"] = reserve_amount
     settings["use_reserve"] = reserve_amount > 0
     if payday_raw:
-        settings["payday_day"] = int(payday_raw)
+        settings["payday_day"] = _to_int(payday_raw, settings.get("payday_day", 1))
     save(SETTINGS, settings)
 
     snapshots = load(SNAPSHOTS, [])
@@ -2046,12 +2076,12 @@ def setup_recurring_add():
     name = request.form.get("name", "").strip()
     if amount and name:
         data = load(PAYMENTS, [])
-        due_day = int(request.form.get("due_day", 1) or 1)
+        due_day = _to_int(request.form.get("due_day"), 1)
         today_iso = date.today().isoformat()
         data.append({
             "id": uuid.uuid4().hex[:8],
             "name": name,
-            "amount": float(amount),
+            "amount": _to_float(amount),
             "day": due_day,
             "due_day": due_day,
             "frequency": "monthly",

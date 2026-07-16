@@ -138,7 +138,8 @@ def occurrence_matches_frequency(item, year, month):
 
 def recurring_due_date(item, year, month):
     day = int(item.get("due_day", item.get("day", 1)))
-    return date(year, month, min(day, _month_days(year, month)))
+    day = max(1, min(day, _month_days(year, month)))
+    return date(year, month, day)
 
 
 def generate_recurring_for_month(recurring, year, month):

@@ -54,6 +54,7 @@ class FullResetTests(unittest.TestCase):
             mock.patch.object(web, "SETTINGS", self.settings_path),
             mock.patch.object(web, "PAYMENTS", self.payments_path),
             mock.patch.object(web, "AUDIT_LOG_PATH", self.audit_path),
+            mock.patch.object(web, "LOGIN_LOCKOUT_PATH", self.data / "login_lockout.json"),
             mock.patch.object(web, "RECEIPTS_DIR", self.receipts_dir),
         ]
         for p in patches:

@@ -37,10 +37,10 @@ def _to_float(value, default=0.0) -> float:
         return float(default)
 
 
-def _to_int(value, default=1) -> int:
+def _to_int(value, default=1, max_value=31) -> int:
     try:
         n = int(float(str(value).replace(",", ".").strip() or default))
-        return max(1, min(31, n))
+        return max(1, min(max_value, n))
     except Exception:
         return int(default)
 
@@ -59,6 +59,15 @@ def _needs_first_run(settings_path=None, payments_path=None) -> bool:
         settings = {}
     if not isinstance(payments, list):
         payments = []
+
+    if settings.get("setup_complete"):
+        # The wizard has already run once for this install. Deleting the
+        # last recurring payment (e.g. a loan that's been paid off) is
+        # normal household bookkeeping, not "this install was never set
+        # up" -- never re-trigger the wizard from that state, since
+        # submitting it again would silently overwrite live data with no
+        # backup (unlike /settings/reset, which backs up first).
+        return False
 
     has_balance = "account_balance" in settings or "real_balance" in settings
     has_payments = len(payments) > 0
@@ -82,7 +91,7 @@ SETUP_HTML = """
 *{box-sizing:border-box}
 body{
   margin:0; min-height:100vh; color:var(--text);
-  font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji","Segoe UI Symbol";
   background:radial-gradient(circle at top left,#1e3a8a 0,#0f172a 38%,#020617 100%);
 }
 .wrap{max-width:980px;margin:0 auto;padding:22px}

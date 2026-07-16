@@ -7,7 +7,7 @@
 <style>
 :root{--bg:#0b1020;--card:#1f2937;--panel:#111827;--line:#374151;--text:#e5e7eb;--muted:#9ca3af;--blue:#2563eb;--red:#b91c1c;--green:#22c55e;--orange:#f59e0b;--teal:#0d9488;--purple:#7c3aed}
 *{box-sizing:border-box}
-body{margin:0;background:linear-gradient(135deg,#0f172a,#111827);color:var(--text);font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+body{margin:0;background:linear-gradient(135deg,#0f172a,#111827);color:var(--text);font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji","Segoe UI Symbol"}
 .app{display:grid;grid-template-columns:370px 1fr;gap:18px;padding:18px}
 .table-scroll{overflow-x:auto}
 .sidebar{display:flex;flex-direction:column;gap:14px}
@@ -826,7 +826,7 @@ body{font-variant-numeric:tabular-nums}
 <div class="task-card {{accent}}" data-payment-id="{{p.get('id','')}}" data-cycle-key="{{p.get('origin_cycle_key', cycle_key)}}">
 <div class="task-card-head">
 <span class="task-card-name">{{p.name}}{% if p.get('carryover_label') %}<br><span class="small">{{p.carryover_label}}</span>{% endif %}</span>
-<span class="task-card-amount {{accent}}">{{p.amount}} €</span>
+<span class="task-card-amount {{accent}}">{{"%.2f"|format(p.amount)}} €</span>
 </div>
 <div class="task-card-meta">
 <span>Splatné {{p.due_date}}</span>
@@ -852,7 +852,7 @@ body{font-variant-numeric:tabular-nums}
 <div class="task-card deferred" data-payment-id="{{p.get('id','')}}" data-cycle-key="{{p.get('origin_cycle_key', cycle_key)}}">
 <div class="task-card-head">
 <span class="task-card-name">{{p.name}}</span>
-<span class="task-card-amount deferred">{{p.amount}} €</span>
+<span class="task-card-amount deferred">{{"%.2f"|format(p.amount)}} €</span>
 </div>
 <div class="task-card-meta">
 <span>Odložené do {{p.get('deferred_to','-')}} · pôvodne {{p.get('origin_cycle_key','-')}}</span>
@@ -879,7 +879,7 @@ body{font-variant-numeric:tabular-nums}
 <div class="task-card {{accent}}" data-payment-id="{{p.get('id','')}}" data-cycle-key="{{p.get('origin_cycle_key', cycle_key)}}">
 <div class="task-card-head">
 <span class="task-card-name">{{p.name}}{% if p.get('carryover_label') %}<br><span class="small">{{p.carryover_label}}</span>{% endif %}</span>
-<span class="task-card-amount {{accent}}">{{p.amount}} €</span>
+<span class="task-card-amount {{accent}}">{{"%.2f"|format(p.amount)}} €</span>
 </div>
 <div class="task-card-meta">
 <span>Splatné {{p.due_date}}</span>
@@ -1274,7 +1274,7 @@ Po započítaní otvorených platieb a zostávajúcich obálok ostáva {{summary
 {% if next_deferred %}<div class="small">Najbližšie: {{next_deferred.name}} — {{next_deferred.deferred_to}}</div>{% endif %}
 <div class="deferred-mini-list">
 {% for p in (deferred|sort(attribute='deferred_to'))[:3] %}
-<div class="deferred-mini-row"><span>{{p.name}}</span><span>{{p.amount}} € · {{p.deferred_to}}</span></div>
+<div class="deferred-mini-row"><span>{{p.name}}</span><span>{{"%.2f"|format(p.amount)}} € · {{p.deferred_to}}</span></div>
 {% endfor %}
 </div>
 {% else %}<div class="empty-state"><strong>Žiadne odložené platby.</strong><span>Keď platbu odložíš, dashboard tu ukáže najbližší nový termín.</span></div>{% endif %}
@@ -1330,7 +1330,7 @@ Po započítaní otvorených platieb a zostávajúcich obálok ostáva {{summary
 <div class="task-card paid">
 <div class="task-card-head">
 <span class="task-card-name">{{p.name}}</span>
-<span class="task-card-amount paid">{{p.amount}} €</span>
+<span class="task-card-amount paid">{{"%.2f"|format(p.amount)}} €</span>
 </div>
 <div class="task-card-meta"><span class="badge {{state_badge_class.get(p.state,'')}}">{{state_label.get(p.state, p.state)}}</span></div>
 {{ balance_effect_note(p) }}
@@ -1397,7 +1397,7 @@ Po započítaní otvorených platieb a zostávajúcich obálok ostáva {{summary
 <div class="manager-card">
 <div class="manager-card-head">
 <div class="manager-card-title">{{x.get('name')}}</div>
-<div class="manager-card-amount">{{x.get('amount')}} €</div>
+<div class="manager-card-amount">{{"%.2f"|format(x.get('amount') or 0)}} €</div>
 </div>
 <div class="manager-card-meta">
 <span>deň {{x.get('day')}}</span>
@@ -1440,7 +1440,7 @@ Po započítaní otvorených platieb a zostávajúcich obálok ostáva {{summary
 <div class="manager-card">
 <div class="manager-card-head">
 <div class="manager-card-title">{{x.name}}</div>
-<div class="manager-card-amount">{{x.amount}} €</div>
+<div class="manager-card-amount">{{"%.2f"|format(x.amount)}} €</div>
 </div>
 <div class="manager-card-meta">
 <span>{{x.due_date}}</span>
@@ -1547,7 +1547,7 @@ Po započítaní otvorených platieb a zostávajúcich obálok ostáva {{summary
 <div class="table-scroll">
 <table><tr><th>Názov</th><th>Suma</th><th>Dátum</th><th></th></tr>
 {% for x in expenses %}
-<tr><td>{{x.get('name')}}{% if x.get('source')=='ocr' %} <span class="badge">OCR{% if x.get('merchant') %}: {{x.merchant}}{% endif %}</span>{% endif %}</td><td>{{x.get('amount')}} €</td><td>{{x.get('date')}}</td>
+<tr><td>{{x.get('name')}}{% if x.get('source')=='ocr' %} <span class="badge">OCR{% if x.get('merchant') %}: {{x.merchant}}{% endif %}</span>{% endif %}</td><td>{{"%.2f"|format(x.get('amount') or 0)}} €</td><td>{{x.get('date')}}</td>
 <td class="actions">
 <form method="get" action="/edit/expense/{{loop.index0}}"><button class="secondary">Upraviť</button></form>
 <form method="post" action="/expense/delete/{{loop.index0}}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="danger">Zmazať</button></form>
@@ -1594,7 +1594,7 @@ Po započítaní otvorených platieb a zostávajúcich obálok ostáva {{summary
 <div class="table-scroll">
 <table><tr><th>Názov</th><th>Suma</th><th>Deň</th><th></th></tr>
 {% for x in incomes %}
-<tr><td>{{x.get('name')}}</td><td>{{x.get('amount')}} €</td><td>{{x.get('day')}}</td>
+<tr><td>{{x.get('name')}}</td><td>{{"%.2f"|format(x.get('amount') or 0)}} €</td><td>{{x.get('day')}}</td>
 <td class="actions">
 <form method="get" action="/edit/income/{{loop.index0}}"><button class="secondary">Upraviť</button></form>
 <form method="post" action="/income/delete/{{loop.index0}}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="danger">Zmazať</button></form>

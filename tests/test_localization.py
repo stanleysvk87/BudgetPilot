@@ -67,6 +67,7 @@ class LocalizedAppTest(unittest.TestCase):
             mock.patch.object(web, "ONETIME", data / "onetime.json"),
             mock.patch.object(web, "ENVELOPES", data / "envelopes.json"),
             mock.patch.object(web, "AUDIT_LOG_PATH", data / "audit_log.json"),
+            mock.patch.object(web, "LOGIN_LOCKOUT_PATH", data / "login_lockout.json"),
             mock.patch.object(web, "RECEIPTS_DIR", data / "receipts"),
             mock.patch.object(pe, "PAYMENT_EVENTS", data / "payment_events.json"),
             mock.patch.object(bfs, "DATA", data),
