@@ -79,14 +79,6 @@ Then inspect every screenshot before committing it. It must show fake numbers
 and no usernames, passwords, tokens, terminal output, local paths, LAN IPs, or
 real household data.
 
-## Legacy Files
-
-Historical prototypes and one-off patch scripts live under `legacy/`. They
-are useful project history, but they are not part of the supported web UI/CLI
-path and some write directly to `~/BudgetPilot`. Keep them documented as
-historical/unsupported, or remove them from a release branch if you want the
-smallest possible public tree.
-
 ## Security Position
 
 BudgetPilot has a first-run local administrator account, CSRF protection,

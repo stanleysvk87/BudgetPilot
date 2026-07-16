@@ -72,9 +72,7 @@ the first public release is still **localhost, trusted LAN, or private VPN
 HTTPS, Docker, or a reverse proxy are useful transport/deployment tools, but
 they are not a substitute for authentication and network access control.
 
-Older Tkinter GUI prototypes and one-off patch scripts live in `legacy/`
-for history; the supported way to use BudgetPilot today is the CLI and the
-Flask web UI.
+The supported way to use BudgetPilot today is the CLI and the Flask web UI.
 
 ## Local-first philosophy
 
@@ -203,7 +201,6 @@ data.example/            Fake demo/example JSON data you can copy into data/
 backups/                 Local data backups (gitignored)
 docs/                    Documentation (see below)
 tests/                   Unit tests (stdlib unittest, no extra dependency)
-legacy/                  Older Tkinter prototypes and one-off patch scripts
 ```
 
 ## Documentation

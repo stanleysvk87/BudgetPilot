@@ -84,11 +84,6 @@ Maintenance scripts:
 
 - `scripts/load_demo_data.py`
 
-Legacy code:
-
-- `legacy/*` - historical Tkinter prototypes and patch scripts. Do not run on
-  live data unless manually reviewed.
-
 Generated/ignored local files:
 
 - `__pycache__/`, `.venv/`, `tests/__pycache__/`, `scripts/__pycache__/`
@@ -100,7 +95,6 @@ User data:
 
 Candidates for later archival, not deleted in this pass:
 
-- `legacy/*`
 - older backup trees under ignored `backups/`
 
 ## 4. Confirmed Working Features
@@ -421,6 +415,5 @@ were preserved rather than reverted.
 - Fedora, Arch, Ubuntu, and x86_64 were not directly tested.
 - OCR depends on optional system Tesseract packages and was not validated in
   Docker.
-- Legacy scripts remain tracked and can confuse new contributors.
 - Runtime JSON is simple and local-first, but there is no migration framework.
 - Authentication is single-admin, not multi-user authorization.

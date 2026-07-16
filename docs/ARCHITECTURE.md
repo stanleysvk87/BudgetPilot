@@ -118,11 +118,3 @@ always has `unittest` loaded and can't exercise the "bare script" case —
 that a plain script with neither `unittest`/`pytest` nor
 `BUDGETPILOT_TEST_MODE` set is left alone, while one with
 `BUDGETPILOT_TEST_MODE=1` set is blocked from touching production data.
-
-## Historical files
-
-`legacy/` contains earlier Tkinter prototypes and one-off patch scripts
-kept for history. They are not part of the supported CLI/web-UI architecture
-described above and aren't required to run BudgetPilot today. Some of them
-write directly to `~/BudgetPilot`, so treat them as historical reference
-only, not release tooling.
