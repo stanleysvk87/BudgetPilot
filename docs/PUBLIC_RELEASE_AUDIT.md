@@ -16,7 +16,7 @@ Major release-readiness work completed in this pass:
 - protected financial pages, APIs, and write actions behind login or Basic
   Auth compatibility credentials;
 - kept CSRF protection on state-changing requests;
-- added logout and basic per-session login throttling;
+- added logout and basic IP-based login throttling;
 - added Dockerfile, Docker Compose, `.dockerignore`, `.env.example`,
   `.editorconfig`, and `.gitattributes`;
 - moved Docker runtime state to `/var/lib/budgetpilot` in a persistent named
@@ -229,7 +229,8 @@ Positive findings:
 Remaining security limits:
 
 - not safe for direct public-internet exposure;
-- login throttling is per browser session only;
+- login throttling is keyed by the observed client IP, so shared NAT and
+  reverse proxies affect how attempts are grouped;
 - no HTTPS termination inside the app;
 - no multi-user authorization model;
 - no password reset flow by design;

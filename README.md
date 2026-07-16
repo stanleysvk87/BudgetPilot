@@ -88,7 +88,7 @@ Screenshots must be captured from sanitized demo data only. The public
 documentation set is generated from an isolated synthetic runtime:
 
 ```bash
-npm install
+npm ci
 npx playwright install chromium
 npm run screenshots:public
 ```
@@ -105,6 +105,11 @@ git clone https://github.com/stanleysvk87/BudgetPilot.git
 cd BudgetPilot
 pip install -r requirements.txt
 ```
+
+`requirements.txt` uses bounded, tested major-version ranges rather than
+open-ended minimums. Docker, native installs, and CI all install from this
+same file. JavaScript tooling is installed with `npm ci` from the committed
+`package-lock.json`.
 
 On a fresh install, BudgetPilot will start with local administrator creation,
 then financial setup. To try the fake demo numbers instead, run
@@ -178,7 +183,7 @@ python3 -m unittest discover -s tests
 Browser tests and visual review require Node and Playwright:
 
 ```bash
-npm install
+npm ci
 npx playwright install chromium
 npm run test:e2e
 npm run review:chromium

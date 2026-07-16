@@ -62,5 +62,12 @@ budgetpilot.example.invalid {
 ```
 
 When using HTTPS through a trusted proxy, set `BUDGETPILOT_COOKIE_SECURE=true`
-and `BUDGETPILOT_PROXY_FIX=true`. BudgetPilot is not designed to run under a
-URL subpath such as `/budgetpilot`; use a dedicated hostname.
+and `BUDGETPILOT_PROXY_FIX=true`. Only enable `BUDGETPILOT_PROXY_FIX` when
+the container is reachable exclusively through that trusted proxy, because
+the app will trust forwarded host, scheme, port, and client-IP headers.
+BudgetPilot is not designed to run under a URL subpath such as
+`/budgetpilot`; use a dedicated hostname.
+
+A reverse proxy must remain private to localhost, a trusted LAN, or a
+private VPN such as WireGuard/Tailscale. Do not publish the proxy or the
+container directly to the public internet.

@@ -11,6 +11,6 @@
     "review:chromium": "node scripts/chromium_visual_review.js"
   },
   "devDependencies": {
-    "@playwright/test": "^1.54.0"
+    "@playwright/test": "1.61.1"
   }
 }

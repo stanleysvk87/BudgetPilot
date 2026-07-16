@@ -29,10 +29,15 @@ On a fresh runtime data directory, open the app and create the first local
 administrator. There is no universal default username or password.
 
 The password hash is stored in `data/users.json`, alongside other local
-runtime data. Back it up with the rest of the `data/` directory. If you lose
-the password, there is intentionally no insecure password-recovery workflow;
-restore from backup or stop the app and carefully replace the local user
-file.
+runtime data. You can change the local administrator username and password
+from Settings -> Administrator and security. Password changes require the
+current password, store a new Werkzeug password hash, and keep the
+single-administrator model.
+
+Back up `data/users.json` with the rest of the `data/` directory. If you
+lose the password, there is intentionally no insecure password-recovery
+workflow; restore from backup or stop the app and carefully replace the
+local user file.
 
 ## Basic Auth compatibility
 
@@ -83,7 +88,10 @@ export BUDGETPILOT_PUBLIC_URL=https://budgetpilot.example.invalid
 ```
 
 Do not enable `BUDGETPILOT_PROXY_FIX` unless the app only receives traffic
-from that trusted proxy.
+from that trusted proxy. When enabled, Flask trusts forwarded host, scheme,
+port, and client-IP headers from that proxy; enabling it for direct or
+untrusted traffic lets clients influence what the app sees as the request
+origin.
 
 ## Other notes
 
@@ -92,12 +100,17 @@ from that trusted proxy.
   injection through that call.
 - There is CSRF protection for state-changing requests, conservative
   security headers, receipt-id path validation, and basic type coercion.
-  Login failures are throttled per browser session, but there is no
-  network-wide rate limiter or account-management system; this is acceptable
-  for a single-household LAN tool, not for public exposure.
-- Repeated failed login attempts are rate-limited per browser session. This
-  is a practical household guard, not a complete brute-force defense for
-  hostile public traffic.
+  Repeated failed logins are throttled server-side by observed client IP.
+  This is a practical household/LAN guard, not a complete brute-force
+  defense for hostile public traffic.
+- IP-based lockout depends on how the app observes client addresses. Shared
+  NAT can group multiple household devices under one address. Reverse
+  proxies can make all clients appear as the proxy address unless forwarded
+  headers are configured correctly, and forwarded headers must only be
+  trusted from a proxy you control.
+- BudgetPilot still must not be exposed directly to the public internet.
+  Private VPN access through WireGuard, Tailscale, or an equivalent private
+  network remains the recommended remote-access model.
 
 ## Future direction
 
@@ -105,5 +118,8 @@ The local administrator account is intentionally simple. Public exposure
 would still need stronger hardening: HTTPS termination, rate limiting,
 monitoring, stronger authentication, and regular dependency maintenance.
 
-If you find a security issue, please open an issue describing it (avoid
-including real financial data in the report).
+If you find a security issue, use GitHub Private Vulnerability Reporting
+when available. If this repository has no private reporting channel, open a
+minimal public issue requesting private contact and do not include sensitive
+details, real financial data, passwords, receipt photos, private network
+details, local paths, screenshots, or data-file contents.

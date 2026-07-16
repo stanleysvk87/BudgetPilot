@@ -12,8 +12,7 @@ RUN addgroup --system budgetpilot \
     && adduser --system --ingroup budgetpilot --home /app budgetpilot
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir -r requirements.txt
+RUN python -m pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 RUN mkdir -p /var/lib/budgetpilot/data /var/lib/budgetpilot/backups \

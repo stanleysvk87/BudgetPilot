@@ -678,12 +678,10 @@ class ReceiptImageRouteTests(AppViewsTestCase):
         html = self.client.get("/receipts?review_receipt=abc123abc123").data.decode()
         self.assertIn("Lidl", html)
 
-    def test_path_traversal_shaped_receipt_id_in_confirm_does_not_delete_outside_files(self):
-        # receipt_confirm()'s receipt_id form field used to be unlinked
-        # with no validation -- a crafted value could delete any
-        # *.review.json-suffixed file reachable via '..' from
-        # RECEIPTS_DIR. Place a file at the exact path such a payload
-        # would target and confirm it survives the request.
+    def test_path_traversal_shaped_receipt_id_in_confirm_is_rejected(self):
+        # A crafted value must not be accepted as expense metadata and must
+        # not delete any *.review.json-suffixed file reachable via '..' from
+        # RECEIPTS_DIR.
         sibling = web.RECEIPTS_DIR.parent / "sibling.review.json"
         sibling.write_text(json.dumps({"amount": 1}))
 
@@ -693,7 +691,7 @@ class ReceiptImageRouteTests(AppViewsTestCase):
             "amount": "10",
             "date": "2026-07-01",
         })
-        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.status_code, 400)
         self.assertTrue(sibling.exists(), "a path-traversal-shaped receipt_id must not delete files")
 
     def test_valid_receipt_id_in_confirm_still_deletes_its_review_file(self):
@@ -708,6 +706,27 @@ class ReceiptImageRouteTests(AppViewsTestCase):
         })
         self.assertEqual(response.status_code, 302)
         self.assertFalse(review_file.exists())
+
+    def test_receipt_confirm_uses_server_side_image_path_metadata(self):
+        review_file = web.RECEIPTS_DIR / "abc123abc123.review.json"
+        review_file.write_text(json.dumps({
+            "amount": 1,
+            "merchant": "Server Merchant",
+            "image_path": str(web.RECEIPTS_DIR / "abc123abc123.jpg"),
+        }))
+
+        response = self.client.post("/receipt/confirm", data={
+            "receipt_id": "abc123abc123",
+            "image_path": "/etc/passwd",
+            "merchant": "Submitted Merchant",
+            "name": "Test",
+            "amount": "10",
+            "date": "2026-07-01",
+        })
+        self.assertEqual(response.status_code, 302)
+        expenses = json.loads(web.EXPENSES.read_text())
+        self.assertEqual(expenses[-1]["original_image_path"], str(web.RECEIPTS_DIR / "abc123abc123.jpg"))
+        self.assertEqual(expenses[-1]["merchant"], "Server Merchant")
 
 
 class HistoryTimelineGroupingTests(AppViewsTestCase):

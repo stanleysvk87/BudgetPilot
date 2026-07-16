@@ -15,7 +15,7 @@ import budgetpilot as bp
 import budgetpilot_web as web
 import balance_first_summary as bfs
 import payment_events as pe
-from werkzeug.security import check_password_hash
+from werkzeug.security import check_password_hash, generate_password_hash
 
 
 TOKEN_INPUT_RE = re.compile(r'name="csrf_token" value="([0-9a-f]+)"')
@@ -212,6 +212,156 @@ class LoginLogoutTests(AuthTestCase):
         response = self.login(password="synthetic-passphrase")
         self.assertEqual(response.status_code, 200)
         self.assertIn("Príliš veľa neúspešných pokusov", response.data.decode())
+
+
+class AccountManagementTests(AuthTestCase):
+    def setUp(self):
+        super().setUp()
+        self.create_admin()
+
+    def settings_token(self):
+        return self.token_from(self.client.get("/settings"))
+
+    def post_account(self, **fields):
+        data = {
+            "username": fields.pop("username", "admin"),
+            "current_password": fields.pop("current_password", "synthetic-passphrase"),
+            "new_password": fields.pop("new_password", ""),
+            "new_password_confirm": fields.pop("new_password_confirm", ""),
+            "csrf_token": fields.pop("csrf_token", self.settings_token()),
+        }
+        data.update(fields)
+        return self.client.post("/settings/account", data=data)
+
+    def stored_admin(self):
+        return json.loads((self.data / "users.json").read_text())["users"][0]
+
+    def test_password_change_hashes_new_password_and_persists_after_reload(self):
+        response = self.post_account(
+            new_password="new-synthetic-passphrase",
+            new_password_confirm="new-synthetic-passphrase",
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("account_success=updated", response.headers["Location"])
+
+        user = self.stored_admin()
+        self.assertNotEqual(user["password_hash"], "new-synthetic-passphrase")
+        self.assertTrue(check_password_hash(user["password_hash"], "new-synthetic-passphrase"))
+
+        self.client.get("/logout")
+        self.assertIn("Neplatné prihlasovacie údaje", self.login().data.decode())
+        self.assertEqual(self.login(password="new-synthetic-passphrase").status_code, 302)
+
+        reloaded_client = web.app.test_client()
+        response = reloaded_client.get("/")
+        self.assertEqual(response.status_code, 302)
+        login_page = reloaded_client.get("/login")
+        token = self.token_from(login_page)
+        response = reloaded_client.post("/login", data={
+            "username": "admin",
+            "password": "new-synthetic-passphrase",
+            "csrf_token": token,
+        })
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.headers["Location"], "/")
+
+    def test_username_change_keeps_current_session_valid(self):
+        response = self.post_account(username="new_admin")
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("account_success=updated", response.headers["Location"])
+        self.assertEqual(self.stored_admin()["username"], "new_admin")
+        self.assertEqual(self.client.get("/settings").status_code, 200)
+
+        self.client.get("/logout")
+        self.assertIn("Neplatné prihlasovacie údaje", self.login().data.decode())
+        self.assertEqual(self.login(username="new_admin").status_code, 302)
+
+    def test_wrong_current_password_is_rejected(self):
+        original = self.stored_admin()["password_hash"]
+        response = self.post_account(
+            current_password="wrong-password",
+            new_password="new-synthetic-passphrase",
+            new_password_confirm="new-synthetic-passphrase",
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("account_error=wrong_current", response.headers["Location"])
+        self.assertEqual(self.stored_admin()["password_hash"], original)
+
+    def test_mismatched_new_password_is_rejected(self):
+        response = self.post_account(
+            new_password="new-synthetic-passphrase",
+            new_password_confirm="different-passphrase",
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("account_error=password_mismatch", response.headers["Location"])
+
+    def test_short_new_password_is_rejected(self):
+        response = self.post_account(new_password="short", new_password_confirm="short")
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("account_error=short_password", response.headers["Location"])
+
+    def test_account_update_requires_csrf_token(self):
+        response = self.client.post("/settings/account", data={
+            "username": "admin",
+            "current_password": "synthetic-passphrase",
+            "new_password": "new-synthetic-passphrase",
+            "new_password_confirm": "new-synthetic-passphrase",
+        })
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(check_password_hash(self.stored_admin()["password_hash"], "new-synthetic-passphrase"))
+
+    def test_account_update_requires_authentication(self):
+        self.client.get("/logout")
+        response = self.client.post("/settings/account", data={
+            "username": "admin",
+            "current_password": "synthetic-passphrase",
+            "new_password": "new-synthetic-passphrase",
+            "new_password_confirm": "new-synthetic-passphrase",
+        })
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/login", response.headers["Location"])
+        self.assertFalse(check_password_hash(self.stored_admin()["password_hash"], "new-synthetic-passphrase"))
+
+    def test_invalid_username_is_rejected(self):
+        response = self.post_account(username="bad username")
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("account_error=invalid_username", response.headers["Location"])
+        self.assertEqual(self.stored_admin()["username"], "admin")
+
+    def test_username_collision_is_rejected_when_extra_record_exists(self):
+        store = json.loads((self.data / "users.json").read_text())
+        store["users"].append({
+            "username": "other_admin",
+            "password_hash": generate_password_hash("other-synthetic-passphrase"),
+        })
+        (self.data / "users.json").write_text(json.dumps(store))
+
+        response = self.post_account(username="other_admin")
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("account_error=username_exists", response.headers["Location"])
+        self.assertEqual(self.stored_admin()["username"], "admin")
+
+    def test_password_change_preserves_existing_legacy_username_shape(self):
+        store = {
+            "users": [{
+                "username": "správca",
+                "password_hash": generate_password_hash("synthetic-passphrase"),
+            }]
+        }
+        (self.data / "users.json").write_text(json.dumps(store))
+        with self.client.session_transaction() as sess:
+            sess[web.AUTH_SESSION_KEY] = "správca"
+
+        response = self.post_account(
+            username="správca",
+            new_password="new-synthetic-passphrase",
+            new_password_confirm="new-synthetic-passphrase",
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("account_success=updated", response.headers["Location"])
+        user = self.stored_admin()
+        self.assertEqual(user["username"], "správca")
+        self.assertTrue(check_password_hash(user["password_hash"], "new-synthetic-passphrase"))
 
 
 if __name__ == "__main__":

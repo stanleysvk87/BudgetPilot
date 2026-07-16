@@ -78,7 +78,9 @@ what exists; this file records whether a specific cycle's occurrence is
 
 Created when the first local administrator account is submitted at
 `/auth/setup`. It stores the username and Werkzeug password hash. It does
-not store the plaintext password.
+not store the plaintext password. Settings -> Administrator and security can
+update the single administrator username and/or replace the password hash
+after the current password is confirmed.
 
 ## `data/incomes.json`
 

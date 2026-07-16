@@ -8,14 +8,20 @@ Use this before pushing BudgetPilot to a public remote or making a release.
 git status --short
 python3 -m unittest discover -s tests
 python3 -m py_compile budgetpilot.py budgetpilot_web.py first_run_wizard.py
+npm ci
+npx playwright install chromium
 npm run test:e2e
 npm run review:chromium
+docker compose config
 ```
 
 - `git status --short` should be clean, except for changes you intend to
   commit.
 - Tests should pass without skipped demo-data assumptions.
 - Chromium E2E and visual review should pass on synthetic data.
+- Python dependencies should come from the bounded ranges in
+  `requirements.txt`; Node tooling should come from `npm ci` and the
+  committed `package-lock.json`.
 - Runtime data should not be staged or committed.
 - After pushing to GitHub, the `Tests` GitHub Actions workflow should pass.
 

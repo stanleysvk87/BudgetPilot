@@ -152,6 +152,9 @@ LOGIN_NEXT_SESSION_KEY = "budgetpilot_login_next"
 LOGIN_LOCKOUT_PATH = DATA / "login_lockout.json"
 MAX_LOGIN_ATTEMPTS = 5
 LOGIN_LOCK_SECONDS = 300
+ADMIN_USERNAME_MIN_LENGTH = 3
+ADMIN_PASSWORD_MIN_LENGTH = 10
+ADMIN_USERNAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 def get_csrf_token():
     """The current session's CSRF token, creating one (and a session, if
@@ -288,15 +291,32 @@ def _load_user_store():
 def _save_user_store(data):
     json_store.atomic_write_json(_users_path(), data)
 
-def _admin_user():
-    users = _load_user_store().get("users", [])
-    for user in users:
+def _admin_user_index(store=None):
+    users = (store or _load_user_store()).get("users", [])
+    for index, user in enumerate(users):
         if isinstance(user, dict) and user.get("username") and user.get("password_hash"):
-            return user
-    return None
+            return index, user
+    return None, None
+
+def _admin_user():
+    return _admin_user_index()[1]
 
 def _has_admin_user():
     return _admin_user() is not None
+
+def _validate_admin_username(username, current_username=None, users=None):
+    username = (username or "").strip()
+    if len(username) < ADMIN_USERNAME_MIN_LENGTH:
+        return "Používateľské meno musí mať aspoň 3 znaky."
+    if not ADMIN_USERNAME_RE.fullmatch(username):
+        return "Používateľské meno môže obsahovať iba písmená, čísla, bodku, pomlčku a podčiarkovník."
+    for user in users or []:
+        if not isinstance(user, dict):
+            continue
+        existing = (user.get("username") or "").strip()
+        if existing and existing != current_username and existing == username:
+            return "Toto používateľské meno už existuje."
+    return ""
 
 def _safe_next(default="/"):
     value = request.args.get("next") or request.form.get("next") or session.get(LOGIN_NEXT_SESSION_KEY) or default
@@ -397,6 +417,35 @@ def _clear_login_failures():
     if lockouts.pop(_login_lockout_key(), None) is not None:
         json_store.atomic_write_json(LOGIN_LOCKOUT_PATH, lockouts)
 
+ACCOUNT_SUCCESS_MESSAGES = {
+    "updated": "Správcovský účet bol aktualizovaný.",
+}
+ACCOUNT_ERROR_MESSAGES = {
+    "missing_current": "Zadaj aktuálne heslo.",
+    "wrong_current": "Aktuálne heslo nie je správne.",
+    "no_changes": "Nebola zadaná žiadna zmena účtu.",
+    "invalid_username": "Používateľské meno môže obsahovať iba písmená, čísla, bodku, pomlčku a podčiarkovník.",
+    "short_username": "Používateľské meno musí mať aspoň 3 znaky.",
+    "username_exists": "Toto používateľské meno už existuje.",
+    "short_password": "Heslo musí mať aspoň 10 znakov.",
+    "password_mismatch": "Heslá sa nezhodujú.",
+}
+
+def _account_message_from_request():
+    success_key = request.args.get("account_success")
+    error_key = request.args.get("account_error")
+    if success_key in ACCOUNT_SUCCESS_MESSAGES:
+        return {"kind": "success", "text": ACCOUNT_SUCCESS_MESSAGES[success_key]}
+    if error_key in ACCOUNT_ERROR_MESSAGES:
+        return {"kind": "error", "text": ACCOUNT_ERROR_MESSAGES[error_key]}
+    return None
+
+def _account_error_code(message):
+    for code, text in ACCOUNT_ERROR_MESSAGES.items():
+        if text == message:
+            return code
+    return "invalid_username"
+
 AUTH_PAGE_CSS = """
 body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
 background:radial-gradient(circle at top left,#1e3a8a 0,#0f172a 38%,#020617 100%);
@@ -434,11 +483,11 @@ AUTH_SETUP_HTML = """<!doctype html>
 <form method="post">
 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 <label>Používateľské meno</label>
-<input name="username" autocomplete="username" minlength="3" required>
+<input name="username" autocomplete="username" minlength="{{ username_min_length }}" required>
 <label>Heslo</label>
-<input name="password" type="password" autocomplete="new-password" minlength="10" required>
+<input name="password" type="password" autocomplete="new-password" minlength="{{ password_min_length }}" required>
 <label>Zopakuj heslo</label>
-<input name="password_confirm" type="password" autocomplete="new-password" minlength="10" required>
+<input name="password_confirm" type="password" autocomplete="new-password" minlength="{{ password_min_length }}" required>
 <button type="submit">Vytvoriť správcu</button>
 </form>
 </main></body></html>"""
@@ -473,9 +522,10 @@ def auth_setup():
         username = (request.form.get("username") or "").strip()
         password = request.form.get("password") or ""
         password_confirm = request.form.get("password_confirm") or ""
-        if len(username) < 3:
-            error = "Používateľské meno musí mať aspoň 3 znaky."
-        elif len(password) < 10:
+        username_error = _validate_admin_username(username)
+        if username_error:
+            error = username_error
+        elif len(password) < ADMIN_PASSWORD_MIN_LENGTH:
             error = "Heslo musí mať aspoň 10 znakov."
         elif password != password_confirm:
             error = "Heslá sa nezhodujú."
@@ -492,7 +542,13 @@ def auth_setup():
             session.clear()
             session[AUTH_SESSION_KEY] = username
             return redirect("/")
-    return render_template_string(AUTH_SETUP_HTML, css=AUTH_PAGE_CSS, error=error)
+    return render_template_string(
+        AUTH_SETUP_HTML,
+        css=AUTH_PAGE_CSS,
+        error=error,
+        username_min_length=ADMIN_USERNAME_MIN_LENGTH,
+        password_min_length=ADMIN_PASSWORD_MIN_LENGTH,
+    )
 
 @app.route("/login", methods=["GET", "POST"], endpoint="auth_login")
 def login():
@@ -525,6 +581,53 @@ def logout():
 def logout_get():
     session.clear()
     return redirect("/login")
+
+@app.post("/settings/account")
+def settings_account_update():
+    store = _load_user_store()
+    users = store.get("users", [])
+    admin_index, admin = _admin_user_index(store)
+    if admin_index is None or not admin:
+        return redirect("/auth/setup")
+
+    current_password = request.form.get("current_password") or ""
+    requested_username = (request.form.get("username") or "").strip()
+    new_password = request.form.get("new_password") or ""
+    new_password_confirm = request.form.get("new_password_confirm") or ""
+    current_username = admin.get("username", "")
+    username_changed = requested_username != current_username
+    password_requested = bool(new_password or new_password_confirm)
+
+    if not username_changed and not password_requested:
+        return redirect("/settings?account_error=no_changes#security-settings")
+    if not current_password:
+        return redirect("/settings?account_error=missing_current#security-settings")
+    if not check_password_hash(admin.get("password_hash", ""), current_password):
+        return redirect("/settings?account_error=wrong_current#security-settings")
+
+    if username_changed:
+        username_error = _validate_admin_username(requested_username, current_username=current_username, users=users)
+        if username_error:
+            return redirect(f"/settings?account_error={_account_error_code(username_error)}#security-settings")
+
+    if password_requested:
+        if len(new_password) < ADMIN_PASSWORD_MIN_LENGTH:
+            return redirect("/settings?account_error=short_password#security-settings")
+        if new_password != new_password_confirm:
+            return redirect("/settings?account_error=password_mismatch#security-settings")
+
+    updated = dict(admin)
+    if username_changed:
+        updated["username"] = requested_username
+    if password_requested:
+        updated["password_hash"] = generate_password_hash(new_password)
+    updated["updated_at"] = datetime.now().isoformat(timespec="seconds")
+
+    users[admin_index] = updated
+    store["users"] = users
+    _save_user_store(store)
+    session[AUTH_SESSION_KEY] = updated["username"]
+    return redirect("/settings?account_success=updated#security-settings")
 
 # Registered after require_authentication so an unauthenticated request always
 # gets the expected login/setup/401 response rather than a confusing CSRF
@@ -1510,6 +1613,10 @@ def render_page(edit_income=None, edit_payment=None, edit_expense=None, active_v
         system_status=system_status,
         problem_reports=problem_reports,
         backups=backups,
+        admin_user=_admin_user() or {},
+        account_message=_account_message_from_request(),
+        admin_username_min_length=ADMIN_USERNAME_MIN_LENGTH,
+        admin_password_min_length=ADMIN_PASSWORD_MIN_LENGTH,
     )
 
 @app.route("/")
@@ -2015,19 +2122,26 @@ def receipt_confirm():
     amount = request.form.get("amount", "").strip()
     if not amount:
         return go_home()
-    # receipt_result only carries what the review form actually round-tripped
-    # (merchant, image_path) — create_expense_from_receipt_result() only
-    # ever uses `confirmed` for the values that matter (amount/date/name).
+    receipt_id = request.form.get("receipt_id") or None
+    if receipt_id and not receipts.is_valid_receipt_id(receipt_id):
+        abort(400)
+    stored_review = {}
+    if receipt_id:
+        stored_review = load(RECEIPTS_DIR / f"{receipt_id}.review.json", {})
+        if not isinstance(stored_review, dict):
+            stored_review = {}
+    # Keep filesystem-derived metadata server-side. The review form may
+    # submit editable merchant text, but image_path must come only from the
+    # stashed review JSON created during upload.
     receipt_result = {
-        "merchant": request.form.get("merchant") or None,
-        "image_path": request.form.get("image_path") or None,
+        "merchant": stored_review.get("merchant") or request.form.get("merchant") or None,
+        "image_path": stored_review.get("image_path") or None,
     }
     confirmed = {
         "name": request.form.get("name", "Iné"),
         "amount": _to_float(amount),
         "date": request.form.get("date", date.today().isoformat()),
     }
-    receipt_id = request.form.get("receipt_id") or None
     expense = receipts.create_expense_from_receipt_result(
         receipt_result, confirmed, receipt_id=receipt_id
     )
@@ -2036,7 +2150,7 @@ def receipt_confirm():
     save(EXPENSES, data)
     log_audit("ocr_expense_saved", f"{confirmed['name']} {confirmed['amount']:.2f} €")
 
-    if receipt_id and receipts.is_valid_receipt_id(receipt_id):
+    if receipt_id:
         (RECEIPTS_DIR / f"{receipt_id}.review.json").unlink(missing_ok=True)
     return go_home()
 

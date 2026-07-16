@@ -26,6 +26,12 @@ maintenance. At `/setup` you can:
   flexibility)
 - cancel or reactivate a recurring obligation
 
+You can change the local administrator username or password later from
+`/settings` in the "Administrator and security" section. Any account change
+requires the current password. New passwords must meet the same minimum
+length used during first-run administrator creation and are stored only as
+Werkzeug password hashes in `data/users.json`.
+
 ## Payday balance snapshot
 
 On payday, go back to `/setup` and enter the real current balance. This

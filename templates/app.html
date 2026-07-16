@@ -26,6 +26,9 @@ table{width:100%;border-collapse:collapse} th,td{padding:11px 8px;border-bottom:
 .actions{display:flex;gap:6px;justify-content:flex-end}.actions form{margin:0}
 .actions-stack{display:flex;flex-direction:column;gap:6px;align-items:stretch;min-width:160px}.actions-stack form{margin:0}.actions-stack select{margin:0}
 .small{font-size:13px;color:var(--muted);line-height:1.35}.inline{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.form-alert{margin:10px 0 0;padding:10px 12px;border-radius:12px;font-size:13px;line-height:1.35}
+.form-alert.success{background:rgba(20,83,45,.38);border:1px solid rgba(34,197,94,.42);color:#bbf7d0}
+.form-alert.error{background:rgba(127,29,29,.35);border:1px solid rgba(239,68,68,.45);color:#fecaca}
 pre{white-space:pre-wrap;background:#020617;border:1px solid var(--line);border-radius:14px;padding:14px;overflow:auto;max-height:380px;font-size:13px}
 .badge{display:inline-block;padding:5px 9px;border-radius:999px;font-size:12px;background:#374151}
 .badge.ok{background:#14532d} .badge.warn{background:#78350f} .badge.bad{background:rgba(127,29,29,.65);color:#fecaca}
@@ -958,6 +961,27 @@ window.BP_EDIT_TARGET = "{% if edit_payment is not none %}edit-form-payment{% el
 <input name="safe_min" value="{{settings.get('safe_min',0)}}">
 <div class="small">Rezerva zostane bokom a nebude sa miešať do peňazí na bežné míňanie.</div>
 <div class="btn-row"><button>Uložiť</button></div>
+</form>
+</div>
+
+<div class="card" id="security-settings">
+<h2>Správca a zabezpečenie</h2>
+<div class="small">Zmena mena alebo hesla vyžaduje aktuálne heslo. Heslo sa ukladá iba ako hash.</div>
+{% if account_message %}
+<div class="form-alert {{ account_message.kind }}">{{ account_message.text }}</div>
+{% endif %}
+<form method="post" action="/settings/account">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+<label>Používateľské meno</label>
+<input name="username" value="{{ admin_user.get('username','') }}" autocomplete="username" minlength="{{ admin_username_min_length }}" required>
+<label>Aktuálne heslo</label>
+<input name="current_password" type="password" autocomplete="current-password" required>
+<label>Nové heslo</label>
+<input name="new_password" type="password" autocomplete="new-password" minlength="{{ admin_password_min_length }}">
+<label>Zopakuj nové heslo</label>
+<input name="new_password_confirm" type="password" autocomplete="new-password" minlength="{{ admin_password_min_length }}">
+<div class="small">Ak meníš iba používateľské meno, nechaj nové heslo prázdne.</div>
+<div class="btn-row"><button>Uložiť zabezpečenie</button></div>
 </form>
 </div>
 

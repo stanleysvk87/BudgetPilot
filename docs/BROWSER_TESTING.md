@@ -9,7 +9,7 @@ default local `data/` directory.
 Install Node dependencies:
 
 ```bash
-npm install
+npm ci
 ```
 
 Install the Chromium browser binary used by Playwright:

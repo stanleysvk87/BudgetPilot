@@ -29,6 +29,15 @@ pip install -r requirements.txt
 pip install --user -r requirements.txt
 ```
 
+## Dependency policy
+
+`requirements.txt` is the supported Python dependency source for native
+installs, Docker, and CI. Runtime packages use bounded major-version ranges
+instead of open-ended minimums: Flask 3.x, Gunicorn 22-23, pytesseract
+0.3.x, and Pillow 10-11. This keeps Python 3.10+ compatibility while
+avoiding surprise major-version upgrades. JavaScript browser-test tooling is
+installed with `npm ci` from the committed `package-lock.json`.
+
 ## Running
 
 ```bash
