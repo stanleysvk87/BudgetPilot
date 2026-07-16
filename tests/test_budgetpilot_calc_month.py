@@ -106,12 +106,17 @@ class CalcMonthDebtWiringTests(CalcMonthIsolatedTestCase):
         r = bp.calc_month(2026, 7)
         self.assertEqual(r["unpaid_required_before_payday"], 150)
 
-    def test_debt_due_before_today_is_excluded(self):
+    def test_overdue_debt_still_counts_like_a_normal_payment(self):
+        # An I_owe debt that's already overdue is still owed -- it must
+        # keep reducing the forecast the same way an overdue recurring
+        # payment does (see CalcMonthFrequencyWiringTests below and
+        # balance_first_summary.py's build_balance_first_summary(), which
+        # already counted an overdue-but-unpaid item toward unpaid_total).
         self.write_debts([
             {"name": "Peter", "amount": 150, "direction": "I_owe", "due_date": "2026-07-01", "state": "pending"},
         ])
         r = bp.calc_month(2026, 7)
-        self.assertEqual(r["unpaid_required_before_payday"], 0)
+        self.assertEqual(r["unpaid_required_before_payday"], 150)
 
 
 class CalcMonthOnetimeWiringTests(CalcMonthIsolatedTestCase):
@@ -133,14 +138,16 @@ class CalcMonthOnetimeWiringTests(CalcMonthIsolatedTestCase):
         self.assertEqual(r["unpaid_required_before_payday"], 0)
         self.assertEqual(r["payments"], [])
 
-    def test_onetime_due_before_today_in_the_same_month_is_excluded_from_forecast(self):
+    def test_onetime_due_before_today_in_the_same_month_still_reduces_forecast(self):
+        # An overdue-but-unpaid one-time obligation is still unpaid money
+        # that has to leave the account -- it must keep counting toward
+        # unpaid_required_before_payday, the same way an overdue recurring
+        # payment or debt does (see CalcMonthDebtWiringTests above).
         self.write_onetime([
             {"id": "ot-1", "name": "Servis auta", "amount": 180, "due_date": "2026-07-01"},
         ])
         r = bp.calc_month(2026, 7)
-        self.assertEqual(r["unpaid_required_before_payday"], 0)
-        # Still shows up in the payments list for the month (e.g. as
-        # overdue-but-unpaid), just doesn't count toward the future forecast.
+        self.assertEqual(r["unpaid_required_before_payday"], 180)
         names = [p["name"] for p in r["payments"]]
         self.assertIn("Servis auta", names)
 

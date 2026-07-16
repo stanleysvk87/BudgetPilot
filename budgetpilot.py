@@ -139,17 +139,28 @@ def calc_month(year, month):
             if due_date(i, year, month) > TODAY:
                 future_income += float(i["amount"])
 
+        # payment_items is already scoped to this month's occurrences, so
+        # every pending item here belongs in the forecast -- including one
+        # whose calendar due_date has already passed. An unpaid bill does
+        # not stop reducing safe-to-spend just because it's now overdue;
+        # matches balance_first_summary.py's build_balance_first_summary(),
+        # which already counts an overdue-but-unpaid item toward its
+        # unpaid_total instead of dropping it.
         upcoming_payments = [
             {**p, "due_date": due_date(p, year, month)}
             for p in payment_items
-            if due_date(p, year, month) >= TODAY
         ]
         # I_owe debts reduce the forecast exactly like any other pending
         # obligation once due; owed_to_me debts are never converted here
-        # (see obligations.debt_to_payment) so they can't inflate it.
+        # (see obligations.debt_to_payment) so they can't inflate it. Same
+        # overdue rule as payments above: an already-due debt still counts.
+        # Debts aren't month-scoped like payments, so still bound them to
+        # "due before the next payday" when that date is known, so a debt
+        # due much later doesn't prematurely reduce today's safe-to-spend.
         upcoming_debts = [
             dp for dp in (debt_to_payment(d) for d in debts)
-            if dp is not None and dp["due_date"] is not None and dp["due_date"] >= TODAY
+            if dp is not None and dp["due_date"] is not None
+            and (next_income is None or dp["due_date"] <= next_income)
         ]
         fc = run_forecast(account_balance, upcoming_payments + upcoming_debts, TODAY, next_income)
         unpaid_required_before_payday = fc["required_main"]
