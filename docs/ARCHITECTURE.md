@@ -61,6 +61,25 @@ introduced by this documentation pass.
   `data/users.json` as a password hash. Optional Basic Auth remains for
   compatibility through `BUDGETPILOT_PASSWORD`; see [SECURITY.md](SECURITY.md).
 
+## Concurrency: single Gunicorn worker by design
+
+`json_store.atomic_write_json()` makes each individual write crash-safe (a
+reader never sees a half-written file), but it does not make a
+read-modify-write *cycle* safe across processes: if two Gunicorn workers both
+read `payments.json`, each apply their own change, and then both write, the
+second write silently overwrites the first with no error. There is no
+cross-process locking in `json_store.py` today.
+
+Because of this, every shipped deployment path (Docker, systemd,
+`.env.example`) defaults `BUDGETPILOT_WORKERS`/`--workers` to **1**. A single
+worker still runs everything through Gunicorn (timeouts, keep-alive, etc.);
+it just removes the possibility of two workers racing the same JSON file.
+This is a deliberate, documented tradeoff rather than an oversight — see
+`docs/DOCKER.md`. For a single household's interactive usage, one worker has
+no practical throughput impact. Raising the worker count is not safe until
+file locking (e.g. `flock`) is added around the read-modify-write cycle in
+every call site that needs it.
+
 ## Test isolation and the production-data guard
 
 Every module that persists state funnels through `json_store.py`'s

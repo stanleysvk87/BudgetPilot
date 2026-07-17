@@ -67,5 +67,11 @@ Thumbs.db
 .vscode/
 .idea/
 
+# local AI coding-assistant tool state (not part of the project)
+.claude/
+.codex/
+.agents/
+.audit-venv/
+
 # generated review/export archives
 *review*.zip

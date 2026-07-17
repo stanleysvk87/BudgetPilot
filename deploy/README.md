@@ -9,6 +9,8 @@ sudo useradd --system --home /var/lib/budgetpilot --create-home --shell /usr/sbi
 sudo mkdir -p /opt/budgetpilot /etc/budgetpilot /var/lib/budgetpilot
 sudo chown -R "$USER":"$USER" /opt/budgetpilot
 sudo chown -R budgetpilot:budgetpilot /var/lib/budgetpilot
+sudo chown -R root:root /etc/budgetpilot
+sudo chmod 750 /etc/budgetpilot
 
 cd /opt/budgetpilot
 git clone https://github.com/stanleysvk87/BudgetPilot.git .
@@ -16,6 +18,8 @@ python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 
 sudo cp .env.example /etc/budgetpilot/budgetpilot.env
+sudo chown root:root /etc/budgetpilot/budgetpilot.env
+sudo chmod 640 /etc/budgetpilot/budgetpilot.env
 sudo cp deploy/budgetpilot.service /etc/systemd/system/budgetpilot.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now budgetpilot.service

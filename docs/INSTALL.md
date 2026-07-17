@@ -62,19 +62,31 @@ configuration, and data directories:
 BudgetPilot does not hard-code these paths. Point it at the runtime data
 directory with `BUDGETPILOT_HOME=/var/lib/budgetpilot`.
 
-Example:
+Example (see `deploy/README.md` for the full systemd walkthrough):
 
 ```bash
+sudo useradd --system --home /var/lib/budgetpilot --create-home --shell /usr/sbin/nologin budgetpilot
 sudo mkdir -p /opt/budgetpilot /var/lib/budgetpilot /etc/budgetpilot
-sudo chown "$USER":"$USER" /opt/budgetpilot /var/lib/budgetpilot
+sudo chown "$USER":"$USER" /opt/budgetpilot
+sudo chown budgetpilot:budgetpilot /var/lib/budgetpilot
+sudo chown root:root /etc/budgetpilot
+sudo chmod 750 /etc/budgetpilot
 
 cd /opt/budgetpilot
 git clone https://github.com/stanleysvk87/BudgetPilot.git .
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 
-cp .env.example /etc/budgetpilot/budgetpilot.env
+sudo cp .env.example /etc/budgetpilot/budgetpilot.env
+sudo chown root:root /etc/budgetpilot/budgetpilot.env
+sudo chmod 640 /etc/budgetpilot/budgetpilot.env
 ```
+
+`/etc/budgetpilot/budgetpilot.env` may hold secrets (e.g. `BUDGETPILOT_PASSWORD`),
+so it stays root-owned and unreadable by other users — the systemd unit's
+`EnvironmentFile=` directive is read by the (root) service manager before it
+drops to the `budgetpilot` user, so this permission does not stop the service
+from picking it up.
 
 Edit `/etc/budgetpilot/budgetpilot.env` for native service use:
 
@@ -86,14 +98,13 @@ BUDGETPILOT_COOKIE_SECURE=false
 BUDGETPILOT_PROXY_FIX=false
 ```
 
-Then run:
-
-```bash
-set -a
-. /etc/budgetpilot/budgetpilot.env
-set +a
-/opt/budgetpilot/.venv/bin/python /opt/budgetpilot/budgetpilot_web.py
-```
+The systemd unit's `EnvironmentFile=` directive loads this file directly (see
+`deploy/budgetpilot.service`) — that's the supported way to run with it, and
+needs no extra permission handling on your part since the (root) service
+manager reads the file before dropping to the `budgetpilot` user. The file is
+root-only (640) on purpose, since it may hold secrets; don't loosen its
+permissions for a manual test run. For a quick foreground check instead, use
+an isolated runtime directory you own, as in the "Running" section above.
 
 For a persistent native service, use the provided systemd unit, which runs
 Gunicorn instead of Flask's development server.

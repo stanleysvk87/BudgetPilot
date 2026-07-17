@@ -25,4 +25,8 @@ VOLUME ["/var/lib/budgetpilot"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/', timeout=3).close()"
 
-CMD ["sh", "-c", "exec gunicorn --bind ${BUDGETPILOT_HOST:-0.0.0.0}:${BUDGETPILOT_PORT:-8765} --workers ${BUDGETPILOT_WORKERS:-2} --timeout 60 budgetpilot_web:app"]
+# BUDGETPILOT_WORKERS defaults to 1: data/*.json has no cross-process file
+# locking, so more than one Gunicorn worker can race a read-modify-write and
+# silently drop an update (see docs/DOCKER.md). Do not raise this without
+# adding locking first.
+CMD ["sh", "-c", "exec gunicorn --bind ${BUDGETPILOT_HOST:-0.0.0.0}:${BUDGETPILOT_PORT:-8765} --workers ${BUDGETPILOT_WORKERS:-1} --timeout 60 budgetpilot_web:app"]

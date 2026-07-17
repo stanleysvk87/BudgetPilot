@@ -11,13 +11,18 @@ EnvironmentFile=-/etc/budgetpilot/budgetpilot.env
 Environment=BUDGETPILOT_HOME=/var/lib/budgetpilot
 Environment=BUDGETPILOT_HOST=127.0.0.1
 Environment=BUDGETPILOT_PORT=8765
-ExecStart=/opt/budgetpilot/.venv/bin/gunicorn --chdir /opt/budgetpilot --bind ${BUDGETPILOT_HOST}:${BUDGETPILOT_PORT} --workers 2 --timeout 60 budgetpilot_web:app
+# Keep --workers at 1: data/*.json has no cross-process file locking, so
+# more than one Gunicorn worker can race a read-modify-write and silently
+# drop an update (see docs/DOCKER.md and docs/ARCHITECTURE.md).
+ExecStart=/opt/budgetpilot/.venv/bin/gunicorn --chdir /opt/budgetpilot --bind ${BUDGETPILOT_HOST}:${BUDGETPILOT_PORT} --workers 1 --timeout 60 budgetpilot_web:app
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
+ProtectHome=true
 ReadWritePaths=/var/lib/budgetpilot
+UMask=0077
 
 [Install]
 WantedBy=multi-user.target

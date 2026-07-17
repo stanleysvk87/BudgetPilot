@@ -25,7 +25,10 @@ VPN. Do not expose this container directly to the public internet.
 container's internal port.
 
 `BUDGETPILOT_WORKERS` controls the Gunicorn worker count inside the
-container. The default is `2`.
+container. The default is `1` and should not be raised: `data/*.json` has no
+cross-process file locking, so more than one worker can race a
+read-modify-write and silently drop an update (see
+[ARCHITECTURE.md](ARCHITECTURE.md#concurrency-single-gunicorn-worker-by-design)).
 
 ## Backups
 

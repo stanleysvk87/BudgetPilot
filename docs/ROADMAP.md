@@ -45,6 +45,10 @@ See "Later / exploratory" below for bigger, more open-ended ideas.
 
 - **Docker packaging hardening** — expand smoke tests and publish a tagged
   multi-architecture image only after CI covers that path.
+- **Cross-process JSON locking** — add `flock`-based locking around the
+  read-modify-write cycle in `json_store.py` so `BUDGETPILOT_WORKERS` can
+  safely be raised above 1. See
+  [ARCHITECTURE.md](ARCHITECTURE.md#concurrency-single-gunicorn-worker-by-design).
 - **Possible public release** — this documentation pass is preparation for
   that, not the release itself. No bank integration, AI, public accounts, or
   cloud sync is planned before or after a public release.

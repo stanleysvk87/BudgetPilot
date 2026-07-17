@@ -49,6 +49,23 @@ Do not publish screenshots, terminal output, logs, or docs containing real:
 - absolute local paths from your machine
 - backup directory contents
 
+## Stray Local Branches / Tags
+
+If any pre-publication history rewrite was ever done on this repo, make sure
+no local-only branch or tag still points at the pre-rewrite commits before
+running any `push --all`/`push --tags`/`push --force` command:
+
+```bash
+git branch -a
+git tag -l
+git log --oneline --all -- backups/ data/*.json | head
+```
+
+A local ref (e.g. a `backup/...` branch kept as a safety net during a
+history cleanup) that still reaches old commits containing real household
+data must never be pushed. Confirm with the repo owner before deleting it,
+and never push it.
+
 ## Secret Scan
 
 Run a quick text scan before publishing:
