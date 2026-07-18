@@ -95,6 +95,12 @@ npm run screenshots:public
 
 Generated screenshots live in `docs/assets/screenshots/`.
 
+| | |
+|---|---|
+| ![Dashboard overview](docs/assets/screenshots/dashboard-en.png) | ![Login](docs/assets/screenshots/login-page.png) |
+| ![Expense overview / payments](docs/assets/screenshots/expense-overview-payments.png) | ![First-run financial setup](docs/assets/screenshots/first-run-financial-setup.png) |
+| ![Mobile dashboard](docs/assets/screenshots/mobile-portrait-dashboard.png) | ![Mobile navigation](docs/assets/screenshots/mobile-navigation.png) |
+
 ## Quick start
 
 Requires Python 3.10+. Flask is needed for the web UI; `pytesseract` and
