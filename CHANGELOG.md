@@ -4,6 +4,15 @@ Human-readable summary of the project's major changes. All dates 2026-07-09
 (the revival happened in a single day's work session, building on an older,
 previously non-git-tracked local project) except where noted.
 
+## Add desktop app mode (2026-07-24)
+
+New `desktop_app.py`: runs the existing Flask app unchanged in a
+background thread and opens it in a native OS window via pywebview
+instead of a browser tab. Packaging only, no route/template/data changes.
+Kept as an optional extra (`requirements-desktop.txt`) so the server/
+Docker deployment doesn't need a GUI toolkit. See
+[docs/DESKTOP_APP.md](docs/DESKTOP_APP.md).
+
 ## `v0.1.0` — Initial public MVP (2026-07-16)
 
 First public release candidate for BudgetPilot as a local-first household

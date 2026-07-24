@@ -51,6 +51,8 @@ tracks what's still coming:
 - Both a CLI (`budgetpilot.py`) and a Flask web dashboard
   (`budgetpilot_web.py`) reachable from other devices on your LAN (e.g. a
   phone)
+- Optional desktop app mode (`desktop_app.py`): the same Flask app opens in
+  a native OS window instead of a browser tab
 
 ## Current project status
 
@@ -154,6 +156,29 @@ container's persistent runtime home in a named Docker volume and binds the port 
 default. On first launch, create the local administrator account in the
 browser. See [docs/DOCKER.md](docs/DOCKER.md) before enabling LAN access.
 
+### Run as a desktop app
+
+For a single-user local install, `desktop_app.py` runs the same Flask app
+in the background and opens it in a native OS window (no browser chrome,
+no address bar) via [pywebview](https://pywebview.flowrl.com/):
+
+```bash
+pip install -r requirements-desktop.txt
+python3 desktop_app.py
+```
+
+On Linux this needs a system WebKitGTK backend (e.g. on
+Debian/Ubuntu-based distros: `sudo apt install python3-gi gir1.2-webkit2-4.1`,
+or the `python3-webview` package where available, since PyGObject bindings
+are not reliably pip-installable). The window always binds to
+`127.0.0.1` on a free port chosen at startup, independent of the
+`BUDGETPILOT_PORT` used by the server/Docker deployment, so it never
+collides with an already-running instance.
+
+To add an app-menu launcher, point a `.desktop` entry's `Exec=` at a small
+wrapper script that `cd`s into the repo and runs
+`python3 desktop_app.py` — see [docs/DESKTOP_APP.md](docs/DESKTOP_APP.md).
+
 ### Configuration
 
 BudgetPilot works without environment variables. Optional settings:
@@ -203,6 +228,7 @@ environment variables, screenshot capture, and cleanup.
 ```
 budgetpilot.py         CLI: forecast, print_month, spend check
 budgetpilot_web.py      Flask web dashboard + /setup first-run flow
+desktop_app.py           Runs budgetpilot_web.py in a native OS window (pywebview)
 forecast.py             Pure forecast function + payment-state rules
 obligations.py          Pure helpers: recurring/one-time obligations, debts,
                          account-balance snapshot resolution
@@ -219,6 +245,8 @@ tests/                   Unit tests (stdlib unittest, no extra dependency)
 - [docs/QUICKSTART.md](docs/QUICKSTART.md) — fastest path to running it
 - [docs/INSTALL.md](docs/INSTALL.md) — Python/Flask setup, troubleshooting
 - [docs/DOCKER.md](docs/DOCKER.md) — Docker Compose setup and backup notes
+- [docs/DESKTOP_APP.md](docs/DESKTOP_APP.md) — run BudgetPilot as a native
+  desktop window instead of a browser tab
 - [docs/USAGE.md](docs/USAGE.md) — first-run setup, payday snapshots, states
 - [docs/DATA_MODEL.md](docs/DATA_MODEL.md) — the JSON files explained
 - [docs/CASHFLOW_LOGIC.md](docs/CASHFLOW_LOGIC.md) — the forecast rules in

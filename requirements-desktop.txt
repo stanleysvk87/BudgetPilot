@@ -1,0 +1,5 @@
+# Extra dependency for `python desktop_app.py` (native window mode).
+# Not needed for the server/Docker deployment (see requirements.txt) — kept
+# separate so `docker build` / systemd deployments don't pull in a GUI stack.
+-r requirements.txt
+pywebview>=5,<6
