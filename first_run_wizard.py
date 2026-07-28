@@ -256,7 +256,7 @@ def register_first_run_wizard(app, data_path=None, settings_path=None, payments_
     @app.before_request
     def _first_run_gate():
         if request.endpoint in {
-            "first_run_setup", "auth_setup", "auth_login", "logout", "logout_get",
+            "first_run_setup", "auth_setup", "auth_login", "logout",
             "settings_restore", "set_language", "static",
         }:
             return None

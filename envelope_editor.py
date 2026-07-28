@@ -7,10 +7,11 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from flask import jsonify, redirect, request
+from flask import jsonify, request
 
 import audit_log
 import json_store
+from http_utils import redirect_back
 from paths import app_base, data_dir
 
 BASE = app_base()
@@ -90,19 +91,25 @@ def register_envelope_editor(app):
             envelopes = []
 
         normalized = [
-            _normalize(dict(e)) for e in envelopes
+            (e, _normalize(dict(e))) for e in envelopes
             if isinstance(e, dict) and e.get("active", True) is not False
         ]
 
         return jsonify({
             "envelopes": [
                 {
-                    "id": e.get("id"),
+                    # The id as actually stored, never the throwaway one
+                    # _normalize() invents for the response: an id that
+                    # exists only in this response can't be matched by
+                    # /api/envelopes/update, so sending it would just force
+                    # the weaker name-based lookup. Empty means "no id on
+                    # disk", which the update route handles explicitly.
+                    "id": stored.get("id") or "",
                     "name": _name(e),
                     "amount": _amount(e),
                     "updated_at": e.get("updated_at", ""),
                 }
-                for e in normalized
+                for stored, e in normalized
             ]
         })
 
@@ -119,17 +126,25 @@ def register_envelope_editor(app):
         if amount < 0:
             amount = 0.0
 
+        # The submitted id wins whenever it matches something. Matching on
+        # "id OR name" in one pass meant the first record sharing the *new*
+        # name was edited instead: with ["Strava"(id=A), "Auto"(id=B)],
+        # renaming Auto to "Strava" matched A by name first, so A's budget
+        # was overwritten and B kept its old name untouched.
+        #
+        # The name fallback still exists for envelopes created by
+        # /envelope/add, which stores only a category and no id.
         found = None
-        for e in envelopes:
-            if not isinstance(e, dict):
-                continue
-
-            same_id = envelope_id and str(e.get("id", "")) == envelope_id
-            same_name = name and _name(e).lower() == name.lower()
-
-            if same_id or same_name:
-                found = e
-                break
+        if envelope_id:
+            for e in envelopes:
+                if isinstance(e, dict) and str(e.get("id", "")) == envelope_id:
+                    found = e
+                    break
+        if found is None and name:
+            for e in envelopes:
+                if isinstance(e, dict) and _name(e).lower() == name.lower():
+                    found = e
+                    break
 
         if found is None:
             found = {
@@ -149,4 +164,4 @@ def register_envelope_editor(app):
 
         audit_log.log_action(AUDIT_LOG_PATH, "envelope_amount_changed", f"{_name(found)} -> {amount:.2f} €")
 
-        return redirect(request.referrer or "/?v=envelopes-updated")
+        return redirect_back("/?v=envelopes-updated")

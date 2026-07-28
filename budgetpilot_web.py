@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
+import contextlib
 import hmac
+import io
+import ipaddress
 import json
 import os
 import re
 import secrets
 import shutil
-import subprocess
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -24,6 +27,7 @@ import audit_log
 import balance_first_summary as bfs
 import json_store
 from forecast import payment_state, PENDING, PAID_ME, PAID_OTHER, PAID_RESERVE, DEFERRED
+from http_utils import safe_local_path
 from paths import app_base, data_dir
 from i18n import (
     DEFAULT_LANGUAGE,
@@ -98,6 +102,25 @@ if os.environ.get("BUDGETPILOT_PROXY_FIX", "").lower() in {"1", "true", "yes"}:
     app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
 
 SECRET_KEY_PATH = DATA / ".session_secret_key"
+
+def _write_secret_key_atomically(key):
+    """Write `key` to SECRET_KEY_PATH via a 0600 temp file + rename, so
+    the destination is either the old content or the complete new key --
+    never a zero-byte file, which is the state this function exists to
+    recover from."""
+    tmp = SECRET_KEY_PATH.with_name(f".{SECRET_KEY_PATH.name}.{uuid.uuid4().hex}.tmp")
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(key)
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, SECRET_KEY_PATH)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
+    return key
 
 def _load_or_create_secret_key():
     """Flask needs a stable secret_key to sign the session cookie the
@@ -182,12 +205,6 @@ def current_language():
 def t(text, **values):
     return translate(text, current_language(), **values)
 
-def _safe_local_path(value, default="/"):
-    parsed = urlparse(value or default)
-    if parsed.scheme or parsed.netloc or not parsed.path.startswith("/"):
-        return default
-    return parsed.path + (("?" + parsed.query) if parsed.query else "")
-
 app.jinja_env.globals["_"] = t
 app.jinja_env.globals["t"] = t
 app.jinja_env.globals["current_language"] = current_language
@@ -208,7 +225,7 @@ def load_language_preference():
 def set_language(language):
     lang = normalize_language(language)
     session[LANGUAGE_SESSION_KEY] = lang
-    target = _safe_local_path(request.args.get("next") or request.referrer or "/")
+    target = safe_local_path(request.args.get("next") or request.referrer or "/")
     response = redirect(target)
     response.set_cookie(LANGUAGE_COOKIE, lang, max_age=60 * 60 * 24 * 365, samesite="Lax")
     return response
@@ -325,6 +342,23 @@ def _safe_next(default="/"):
         return default
     return parsed.path + (("?" + parsed.query) if parsed.query else "")
 
+def _secret_equals(submitted, expected):
+    """Constant-time comparison that accepts any text, not just ASCII.
+
+    hmac.compare_digest() raises TypeError for a str containing a
+    non-ASCII character, and both call sites feed it attacker/user
+    controlled input. Before this, a login attempt with a diacritic in
+    the username ("Ľuboš") -- or a Basic Auth header carrying one, which
+    is checked in a before_request hook and therefore 500s *every* route
+    pre-auth -- produced a 500 + traceback instead of "invalid
+    credentials", and never reached _record_failed_login(). Comparing the
+    UTF-8 bytes keeps the constant-time property for any input.
+    """
+    return hmac.compare_digest(
+        str(submitted or "").encode("utf-8"),
+        str(expected or "").encode("utf-8"),
+    )
+
 def _basic_auth_valid():
     password = _auth_password()
     if not password:
@@ -332,8 +366,8 @@ def _basic_auth_valid():
     auth = request.authorization
     return bool(
         auth
-        and hmac.compare_digest(auth.username or "", _auth_username())
-        and hmac.compare_digest(auth.password or "", password)
+        and _secret_equals(auth.username, _auth_username())
+        and _secret_equals(auth.password, password)
     )
 
 def _session_authenticated():
@@ -513,10 +547,47 @@ LOGIN_HTML = """<!doctype html>
 </form>
 </main></body></html>"""
 
+SETUP_BLOCKED_HTML = """<!doctype html>
+<html lang="sk"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BudgetPilot - vytvorenie správcu je zamknuté</title><style>{{css|safe}}</style></head>
+<body><main class="card">
+<h1>Vytvorenie správcu je zamknuté</h1>
+<div class="hint">Táto inštancia ešte nemá správcovský účet. Kým ho nemá, ktokoľvek v sieti,
+kto sa sem dostane prvý, by si mohol založiť účet a vlastniť tvoje finančné dáta.
+Preto sa prvý účet dá vytvoriť len z toho istého počítača, na ktorom BudgetPilot beží.</div>
+<div class="warning">Otvor <strong>http://127.0.0.1:{{port}}/auth/setup</strong> priamo na tom stroji.
+Ak naozaj potrebuješ založiť účet z iného zariadenia, spusti aplikáciu s
+<code>BUDGETPILOT_ALLOW_REMOTE_SETUP=1</code>.</div>
+</main></body></html>"""
+
+def _remote_setup_allowed():
+    return os.environ.get("BUDGETPILOT_ALLOW_REMOTE_SETUP", "").strip().lower() in {"1", "true", "yes"}
+
+def _request_from_loopback():
+    try:
+        return ipaddress.ip_address((request.remote_addr or "").strip()).is_loopback
+    except ValueError:
+        return False
+
 @app.route("/auth/setup", methods=["GET", "POST"])
 def auth_setup():
     if _has_admin_user():
         return redirect("/")
+    # First-run land grab: /auth/setup has to be reachable without
+    # authentication (there is nothing to authenticate against yet), and
+    # native runs bind 0.0.0.0 by default so the app is reachable from
+    # other devices on the LAN. Together that means whoever on the network
+    # reaches a fresh instance first sets the username/password and owns
+    # the household's financial data -- while the page itself tells the
+    # user not to expose the app. Only the machine BudgetPilot runs on may
+    # claim the account; BUDGETPILOT_ALLOW_REMOTE_SETUP=1 is the explicit,
+    # documented opt-out for setting it up from a phone/another device.
+    if not _request_from_loopback() and not _remote_setup_allowed():
+        return Response(
+            render_template_string(SETUP_BLOCKED_HTML, css=AUTH_PAGE_CSS, port=_listen_port()),
+            403,
+            {"Content-Type": "text/html; charset=utf-8"},
+        )
     error = ""
     if request.method == "POST":
         username = (request.form.get("username") or "").strip()
@@ -563,7 +634,7 @@ def login():
             username = (request.form.get("username") or "").strip()
             password = request.form.get("password") or ""
             admin = _admin_user()
-            if admin and hmac.compare_digest(username, admin.get("username", "")) and check_password_hash(admin.get("password_hash", ""), password):
+            if admin and _secret_equals(username, admin.get("username", "")) and check_password_hash(admin.get("password_hash", ""), password):
                 session.clear()
                 session[AUTH_SESSION_KEY] = admin["username"]
                 _clear_login_failures()
@@ -574,11 +645,15 @@ def login():
 
 @app.post("/logout")
 def logout():
-    session.clear()
-    return redirect("/login")
+    """POST only, deliberately.
 
-@app.get("/logout")
-def logout_get():
+    Logging out clears the session, which makes it a state-changing
+    action -- and require_csrf_token() exempts GET on the explicit
+    promise that GET stays read-only. A GET /logout used to exist beside
+    this, which punched a hole straight through that promise: any page
+    anywhere could force a logout with <img src=".../logout">, and link
+    prefetchers did it by accident. The nav submits a real POST form.
+    """
     session.clear()
     return redirect("/login")
 
@@ -643,9 +718,39 @@ def require_csrf_token():
         return None
     expected = session.get(CSRF_SESSION_KEY)
     submitted = request.form.get(CSRF_FORM_FIELD) or request.headers.get(CSRF_HEADER)
-    if not expected or not submitted or not hmac.compare_digest(expected, submitted):
+    # _secret_equals(), not hmac.compare_digest() directly: `submitted` is
+    # raw request input and a non-ASCII value would otherwise raise
+    # TypeError -> 500 instead of the CSRF error page.
+    if not expected or not submitted or not _secret_equals(submitted, expected):
         return _csrf_error_response()
     return None
+
+# Registered after require_csrf_token so a rejected request never takes the
+# lock at all -- Flask stops running before_request hooks as soon as one
+# returns a response.
+@app.before_request
+def acquire_data_write_lock():
+    """Serialize state-changing requests against each other.
+
+    Routes here are read-modify-write over data/*.json: mark-paid loads
+    settings.json, subtracts the amount and writes it back
+    (_shift_main_balance). Two of those running concurrently both read the
+    same starting balance and one subtraction disappears. The app is
+    threaded in every documented run mode (see json_store.data_lock), so
+    "gunicorn --workers 1" never prevented this.
+    """
+    if request.method in SAFE_HTTP_METHODS:
+        return None
+    lock = json_store.data_lock(DATA)
+    lock.__enter__()
+    g.data_write_lock = lock
+    return None
+
+@app.teardown_request
+def release_data_write_lock(exc=None):
+    lock = g.pop("data_write_lock", None)
+    if lock is not None:
+        lock.__exit__(None, None, None)
 
 @app.after_request
 def add_security_headers(response):
@@ -811,47 +916,112 @@ def go_home():
             return redirect(path)
     return redirect("/")
 
-def run_core(args=None):
-    try:
-        cmd = [str(BASE / "budgetpilot.py")]
-        if args:
-            cmd += args
-        env = {**os.environ, "BUDGETPILOT_LANG": current_language()}
-        return subprocess.check_output(cmd, text=True, env=env)
-    except Exception as e:
-        return f"{t('CHYBA:')}\n{e}"
+_CORE_STDOUT_LOCK = threading.Lock()
 
-def parse_dash(core):
+def _sync_core_today():
+    """budgetpilot.TODAY is a module-level constant captured at import.
+
+    That was harmless while every dashboard number came from a freshly
+    forked CLI process, but this module now calls calc_month() in-process
+    inside a long-lived server, where an import-time date goes stale at
+    midnight. Refresh it (and hand the current date back) before any
+    calc_month() call.
+    """
+    today = date.today()
+    if bp.TODAY != today:
+        bp.TODAY = today
+    return today
+
+def core_month_result():
+    """This month's figures straight from budgetpilot.calc_month().
+
+    The dashboard used to fork `BASE/budgetpilot.py` and regex-scrape its
+    printed output for these numbers. Both halves of that were broken:
+
+    - BASE is the *data* home (BUDGETPILOT_HOME), not the code directory,
+      so every deployment that separates the two -- Docker (code /app,
+      home /var/lib/budgetpilot) and the shipped systemd unit (code
+      /opt/budgetpilot) -- got FileNotFoundError and a dashboard
+      permanently showing "-" plus a raw error path;
+    - the scraper matched hardcoded Slovak labels, so switching the UI to
+      English emptied the same metrics even where the fork did work.
+
+    calc_month() is the function the CLI itself prints from, and
+    three_month_forecast() below already calls it directly, so this is
+    also the single source these numbers should have come from all along.
+    Returns None (never raises) if the data can't be computed, so a
+    damaged data file degrades the KPI row instead of the whole page.
+    """
+    try:
+        today = _sync_core_today()
+        return bp.calc_month(today.year, today.month)
+    except Exception:
+        return None
+
+def dashboard_metrics(result):
+    """Format one calc_month() result into the dashboard's KPI strings."""
     d = {
         "money": "-", "day": "-", "status": "-", "status_class": "ok",
         "balance": "-", "unpaid_total": "-", "shortfall": "-",
         "projected_after_payday": "-", "next_payday": "-",
     }
-    for line in core.splitlines():
-        if "Suma na účte teraz" in line:
-            d["balance"] = line.split(":", 1)[1].strip()
-        elif "Nezaplatené do výplaty" in line:
-            d["unpaid_total"] = line.split(":", 1)[1].strip()
-        elif "Chýba do výplaty" in line:
-            d["shortfall"] = line.split(":", 1)[1].strip()
-        elif "Odhad po najbližšej výplate" in line:
-            d["projected_after_payday"] = line.split(":", 1)[1].strip()
-        elif "Ďalšia výplata" in line:
-            d["next_payday"] = line.split(":", 1)[1].strip()
-        elif "Bezpečne minúť teraz" in line:
-            d["money"] = line.split(":", 1)[1].strip()
-        elif "Na deň" in line:
-            d["day"] = line.split(":", 1)[1].strip()
-        elif "Stav" in line:
-            d["status"] = line.split(":", 1)[1].strip()
+    if not result:
+        return d
 
-    if "PROBLÉM" in d["status"]:
+    shortfall = float(result.get("shortfall_before_payday", 0) or 0)
+    daily_limit = result.get("daily_limit")
+    status = t(result.get("status", "")) if result.get("status") else "-"
+
+    d.update({
+        "money": eur(result.get("safe_to_spend_now")),
+        "day": eur(daily_limit) if daily_limit is not None else "-",
+        "status": status,
+        "balance": eur(result.get("account_balance")),
+        "unpaid_total": eur(result.get("unpaid_required_before_payday")),
+        "shortfall": eur(shortfall) if shortfall < 0 else "-",
+        "projected_after_payday": eur(result.get("projected_after_payday")),
+        "next_payday": result.get("next_income_date") or "-",
+    })
+
+    if "PROBLÉM" in d["status"] or "PROBLEM" in d["status"]:
         d["status_class"] = "bad"
-    elif "POZOR" in d["status"]:
+    elif "POZOR" in d["status"] or "WARNING" in d["status"]:
         d["status_class"] = "warn"
     else:
         d["status_class"] = "ok"
     return d
+
+def run_core(args=None):
+    """The CLI's own human-readable output ("Technický výstup" panel and
+    the "Overiť nákup" spend test), rendered in-process.
+
+    Same print functions `./budgetpilot.py` uses, so the text is
+    identical -- but without forking an interpreter per page render, and
+    without assuming the code lives in the data directory (see
+    core_month_result()). Only the text output goes through here; the
+    dashboard's numbers come from core_month_result()/dashboard_metrics().
+    """
+    buffer = io.StringIO()
+    try:
+        today = _sync_core_today()
+        with _CORE_STDOUT_LOCK:
+            # redirect_stdout swaps a process-global, and Flask's dev
+            # server / desktop mode are threaded -- serialize so two
+            # concurrent renders can't capture each other's output.
+            previous_language = bp.CLI_LANGUAGE
+            bp.CLI_LANGUAGE = current_language()
+            try:
+                with contextlib.redirect_stdout(buffer):
+                    if args and args[0] == "spend":
+                        bp.can_spend(float(args[1]))
+                    else:
+                        bp.print_month(bp.calc_month(today.year, today.month))
+                        bp.simulate(18)
+            finally:
+                bp.CLI_LANGUAGE = previous_language
+    except Exception as e:
+        return f"{t('CHYBA:')}\n{e}"
+    return buffer.getvalue()
 
 def eur(value):
     return f"{float(value or 0):.2f} €"
@@ -1063,6 +1233,13 @@ def _debug_balance_context():
         item for item in payments + onetime
         if isinstance(item, dict) and float(item.get("amount", 0) or 0) <= 0
     ]
+    # calc_month() skips an expense whose date isn't a real ISO date rather
+    # than crashing on it (budgetpilot._expense_date). Skipping silently
+    # would just move the problem, so surface it here too.
+    invalid_expenses = [
+        item for item in load(EXPENSES, [])
+        if isinstance(item, dict) and bp._expense_date(item) is None
+    ]
     return {
         "summary": summary,
         "settings": settings,
@@ -1071,6 +1248,7 @@ def _debug_balance_context():
         "events": events,
         "orphan_events": orphan_events,
         "invalid_payments": invalid_payments,
+        "invalid_expenses": invalid_expenses,
         "corrupt_files": _corrupt_data_files(),
     }
 
@@ -1177,6 +1355,18 @@ def _build_problem_reports(ctx):
             "/payments",
             "Upraviť platby",
             [f"{p.get('name') or p.get('id')} · {p.get('amount')}" for p in ctx["invalid_payments"][:8]],
+        )
+
+    if ctx.get("invalid_expenses"):
+        add(
+            "warning",
+            "Výdavky s neplatným dátumom",
+            f"{len(ctx['invalid_expenses'])} výdavok má dátum, ktorý sa nedá prečítať ako YYYY-MM-DD.",
+            "Takýto výdavok sa nezapočíta do žiadneho mesiaca ani do obálok.",
+            "Uprav dátum výdavku v zozname výdavkov.",
+            "/expenses",
+            "Upraviť výdavky",
+            [f"{e.get('name') or '?'} · {e.get('date')}" for e in ctx["invalid_expenses"][:8]],
         )
 
     if not summary.get("last_manual_review") and float(summary.get("current_balance", 0) or 0) == 0:
@@ -1467,7 +1657,10 @@ def render_page(edit_income=None, edit_payment=None, edit_expense=None, active_v
     payments = load(PAYMENTS, [])
     expenses = load(EXPENSES, [])
     setup_needed = ob.needs_setup(settings, payments)
-    core = run_core()
+    # The raw CLI dump is only rendered by the "Technický výstup" panel on
+    # /manage, and the spend test only by /payments -- don't run either
+    # for the views that never show them.
+    core = run_core() if active_view == "manage" else ""
     test_amount = request.args.get("test", "")
     test_result = run_core(["spend", test_amount]) if test_amount else ""
 
@@ -1535,7 +1728,7 @@ def render_page(edit_income=None, edit_payment=None, edit_expense=None, active_v
         for row in envelope_totals["rows"]
     ]
 
-    dash = parse_dash(core)
+    dash = dashboard_metrics(core_month_result())
     balance_summary = bfs.build_balance_first_summary()
     final_available = balance_summary["estimated_after_payments_and_envelopes"]
     summary = {
@@ -1575,6 +1768,7 @@ def render_page(edit_income=None, edit_payment=None, edit_expense=None, active_v
                 "date": stored.get("date") or today.isoformat(),
                 "merchant": stored.get("merchant"),
                 "candidates": stored.get("candidates", []),
+                "error": stored.get("error"),
             }
 
     problem_reports = _build_problem_reports(_debug_balance_context())
@@ -1797,7 +1991,14 @@ def make_payment_from_form():
     day = _to_int(request.form.get("day"), 1)
     month = max(1, min(12, _to_int(request.form.get("month"), 1, max_value=12)))
     year = _to_int(request.form.get("year"), 2026, max_value=9999)
-    freq = request.form.get("frequency","monthly")
+    # Only a frequency the occurrence engine actually understands may be
+    # persisted. obligations.occurrence_matches_frequency() deliberately
+    # treats an unrecognized frequency as "never occurs", so storing one
+    # would hide the payment from every month, every forecast and every
+    # unpaid total while it still sits in payments.json.
+    freq = request.form.get("frequency", "monthly")
+    if freq not in FREQ_LABEL:
+        freq = "monthly"
     start = f"{year:04d}-{month:02d}-{day:02d}"
     item = {
         "name": name,
@@ -2114,6 +2315,11 @@ def receipt_upload():
         "merchant": result.get("merchant"),
         "candidates": result.get("amount_candidates", []),
         "image_path": str(image_path),
+        # Why the guess is empty, when there's a knowable reason (e.g. a
+        # HEIC photo on an install without pillow-heif). Shown on the
+        # review form so "no amount found" isn't indistinguishable from
+        # "the image could not be opened at all".
+        "error": result.get("error"),
     })
     return redirect(f"/receipts?review_receipt={receipt_id}#receipt-review")
 
@@ -2140,7 +2346,12 @@ def receipt_confirm():
     confirmed = {
         "name": request.form.get("name", "Iné"),
         "amount": _to_float(amount),
-        "date": request.form.get("date", date.today().isoformat()),
+        # Same normalization as expense_add()/expense_update(): the review
+        # form's date is user-editable text, and anything that isn't a real
+        # ISO date poisons expenses.json for every consumer that parses it
+        # (calc_month() -> date.fromisoformat()). A receipt printed
+        # "28.7.2026" used to be stored verbatim.
+        "date": _parse_expense_date(request.form.get("date")),
     }
     expense = receipts.create_expense_from_receipt_result(
         receipt_result, confirmed, receipt_id=receipt_id

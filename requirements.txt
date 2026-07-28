@@ -2,3 +2,7 @@ flask>=3.1.3,<3.2
 gunicorn>=26.0.0,<27
 pytesseract>=0.3.13,<0.4
 Pillow>=12.3.0,<13
+# HEIF/HEIC decoding for Pillow. .heic is the iPhone camera default and is
+# accepted by the receipt upload route, but Pillow has no built-in HEIF
+# decoder -- without this the OCR pass silently produces an empty review form.
+pillow-heif>=1.5.0,<2

@@ -2,14 +2,15 @@
 from __future__ import annotations
 
 import calendar
-import re
 from datetime import date, datetime, timedelta
 
-from flask import jsonify, redirect, request
+from flask import jsonify, request
 
 import audit_log
+import envelopes as env
 import obligations as ob
 import json_store
+from http_utils import redirect_back
 from paths import app_base, data_dir
 
 BASE = app_base()
@@ -35,16 +36,10 @@ def _num(value, default=0.0) -> float:
         return float(default)
 
 
-def _norm(value: str) -> str:
-    value = str(value or "").strip().lower()
-    table = str.maketrans({
-        "á": "a", "ä": "a", "č": "c", "ď": "d", "é": "e", "í": "i",
-        "ľ": "l", "ĺ": "l", "ň": "n", "ó": "o", "ô": "o", "ŕ": "r",
-        "š": "s", "ť": "t", "ú": "u", "ý": "y", "ž": "z",
-    })
-    value = value.translate(table)
-    value = re.sub(r"[^a-z0-9]+", " ", value)
-    return re.sub(r"\s+", " ", value).strip()
+# Normalization/matching live in envelopes.py, which is now the single
+# implementation shared with the server-rendered envelope table -- see the
+# comment at the top of that module for why there used to be two.
+_norm = env.normalize_text
 
 
 def _cycle() -> str:
@@ -89,31 +84,9 @@ def _events_by_payment_id(events: list, cycle: str) -> dict:
     return result
 
 
-def _envelope_amount(e: dict) -> float:
-    vals = []
-    for key in ("monthly_budget", "budget", "amount", "monthly_limit", "limit"):
-        if key in e:
-            v = _num(e.get(key), 0)
-            if v > 0:
-                vals.append(v)
-    return max(vals) if vals else 0.0
-
-
-def _expense_amount(e: dict) -> float:
-    for key in ("amount", "total", "price", "value", "suma"):
-        if key in e:
-            v = _num(e.get(key), 0)
-            if v > 0:
-                return v
-    return 0.0
-
-
-def _expense_text(e: dict) -> str:
-    parts = []
-    for key in ("category", "envelope", "name", "title", "merchant", "description", "note", "source"):
-        if e.get(key):
-            parts.append(str(e.get(key)))
-    return _norm(" ".join(parts))
+_envelope_amount = env.envelope_limit
+_expense_amount = env.expense_amount
+_expense_text = env.expense_text
 
 
 def _expense_month(e: dict) -> str:
@@ -124,26 +97,7 @@ def _expense_month(e: dict) -> str:
     return _cycle()
 
 
-def _expense_matches_envelope(expense: dict, envelope_name: str) -> bool:
-    text = _expense_text(expense)
-    env = _norm(envelope_name)
-
-    if not text:
-        return False
-
-    if env and env in text:
-        return True
-
-    aliases = {
-        "strava": ["strava", "potraviny", "jedlo", "food", "lidl", "kaufland", "tesco", "billa"],
-        "nafta": ["nafta", "palivo", "fuel", "benzina", "slovnaft", "omv", "shell"],
-    }
-
-    for alias in aliases.get(env, []):
-        if alias in text:
-            return True
-
-    return False
+_expense_matches_envelope = env.expense_matches_envelope
 
 
 def _is_mandatory(p: dict) -> bool:
@@ -366,33 +320,18 @@ def build_balance_first_summary() -> dict:
         if isinstance(e, dict) and _expense_month(e) == cycle and _expense_amount(e) > 0
     ]
 
-    # Each expense counts toward at most one envelope: _expense_matches_envelope
-    # is a substring/alias match, so a single expense's text (e.g. "nafta v
-    # Kauflande") can satisfy more than one envelope's pattern. Summing every
-    # matching envelope independently would count that expense's amount more
-    # than once in envelope_spent_total/envelope_remaining_total below, which
-    # feed directly into the dashboard's real-balance estimate. First envelope
-    # (in list order) that matches claims the expense; later envelopes skip it.
-    claimed_expense_indexes = set()
+    # Each expense counts toward at most one envelope -- see
+    # envelopes.claim_expenses_by_envelope(), the shared implementation
+    # the server-rendered envelope table uses too.
+    active_envelopes = [
+        e for e in envelopes
+        if isinstance(e, dict) and env.envelope_is_active(e) and env.envelope_limit(e) > 0
+    ]
 
-    for env in envelopes:
-        if not isinstance(env, dict):
-            continue
-        if env.get("active", True) is False:
-            continue
-
-        budget = _envelope_amount(env)
-        if budget <= 0:
-            continue
-
-        name = str(env.get("name") or env.get("category") or "Obálka")
-        spent = 0.0
-        for idx, exp in enumerate(current_expenses):
-            if idx in claimed_expense_indexes:
-                continue
-            if _expense_matches_envelope(exp, name):
-                spent += _expense_amount(exp)
-                claimed_expense_indexes.add(idx)
+    for envelope, matched in env.claim_expenses_by_envelope(active_envelopes, current_expenses):
+        budget = env.envelope_limit(envelope)
+        name = env.envelope_name(envelope)
+        spent = sum(env.expense_amount(e) for e in matched)
 
         remaining = max(budget - spent, 0.0)
         over = max(spent - budget, 0.0)
@@ -403,7 +342,7 @@ def build_balance_first_summary() -> dict:
         envelope_over_total += over
 
         envelope_items.append({
-            "id": str(env.get("id") or ""),
+            "id": str(envelope.get("id") or ""),
             "name": name,
             "amount": round(budget, 2),
             "budget": round(budget, 2),
@@ -521,4 +460,4 @@ def register_balance_first_summary(app):
 
         audit_log.log_action(AUDIT_LOG_PATH, "balance_updated", f"{balance:.2f} €")
 
-        return redirect(request.referrer or "/?v=balance-updated")
+        return redirect_back("/?v=balance-updated")

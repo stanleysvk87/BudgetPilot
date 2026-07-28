@@ -83,6 +83,16 @@ class AuthTestCase(unittest.TestCase):
         self.addCleanup(web.app.config.__setitem__, "BUDGETPILOT_AUTH_BYPASS", previous_auth_bypass)
         self.client = web.app.test_client()
 
+    def logout(self):
+        """POST /logout with a valid CSRF token.
+
+        Logout is deliberately POST-only (it clears the session, so it is
+        a state change and must not be reachable from a GET/prefetch).
+        """
+        with self.client.session_transaction() as session:
+            session["_csrf_token"] = "test-logout-token"
+        return self.client.post("/logout", data={"csrf_token": "test-logout-token"})
+
     def token_from(self, response):
         match = TOKEN_INPUT_RE.search(response.data.decode())
         self.assertIsNotNone(match)
@@ -160,7 +170,7 @@ class LoginLogoutTests(AuthTestCase):
     def setUp(self):
         super().setUp()
         self.create_admin()
-        self.client.get("/logout")
+        self.logout()
 
     def test_protected_page_redirects_to_login(self):
         response = self.client.get("/payments")
@@ -193,7 +203,7 @@ class LoginLogoutTests(AuthTestCase):
     def test_logout_invalidates_session(self):
         self.login()
         self.assertEqual(self.client.get("/").status_code, 200)
-        self.client.get("/logout")
+        self.logout()
         response = self.client.get("/")
         self.assertEqual(response.status_code, 302)
         self.assertIn("/login", response.headers["Location"])
@@ -248,7 +258,7 @@ class AccountManagementTests(AuthTestCase):
         self.assertNotEqual(user["password_hash"], "new-synthetic-passphrase")
         self.assertTrue(check_password_hash(user["password_hash"], "new-synthetic-passphrase"))
 
-        self.client.get("/logout")
+        self.logout()
         self.assertIn("Neplatné prihlasovacie údaje", self.login().data.decode())
         self.assertEqual(self.login(password="new-synthetic-passphrase").status_code, 302)
 
@@ -272,7 +282,7 @@ class AccountManagementTests(AuthTestCase):
         self.assertEqual(self.stored_admin()["username"], "new_admin")
         self.assertEqual(self.client.get("/settings").status_code, 200)
 
-        self.client.get("/logout")
+        self.logout()
         self.assertIn("Neplatné prihlasovacie údaje", self.login().data.decode())
         self.assertEqual(self.login(username="new_admin").status_code, 302)
 
@@ -311,7 +321,7 @@ class AccountManagementTests(AuthTestCase):
         self.assertFalse(check_password_hash(self.stored_admin()["password_hash"], "new-synthetic-passphrase"))
 
     def test_account_update_requires_authentication(self):
-        self.client.get("/logout")
+        self.logout()
         response = self.client.post("/settings/account", data={
             "username": "admin",
             "current_password": "synthetic-passphrase",

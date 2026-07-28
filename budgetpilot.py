@@ -86,6 +86,24 @@ def verdict_text(after, per_day):
         return "🤏 Môžeš, ale nepreháňaj."
     return "✅ Kľudne."
 
+def _expense_date(expense):
+    """An expense's date, or None if it isn't a usable ISO date.
+
+    The web app normalizes every date it writes (_parse_expense_date()),
+    but expenses.json is a plain file a user can hand-edit, restore from
+    an old backup, or have poisoned by a route that once skipped that
+    normalization. A single bad value must not take the whole month's
+    calculation down with an uncaught ValueError -- that crashed the CLI
+    outright and left every web dashboard KPI dead until the JSON was
+    fixed by hand. Skip the unusable row instead; it stays visible in the
+    data and in /problems diagnostics.
+    """
+    try:
+        return date.fromisoformat(str(expense.get("date", "")))
+    except (TypeError, ValueError):
+        return None
+
+
 def calc_month(year, month):
     settings = load(SETTINGS, {"account_balance": 0})
     incomes = load(INCOMES, [])
@@ -121,7 +139,7 @@ def calc_month(year, month):
     )
     expense_items = [
         e for e in expenses
-        if month_start <= date.fromisoformat(e["date"]) <= month_end
+        if (parsed := _expense_date(e)) is not None and month_start <= parsed <= month_end
     ]
 
     income_total = sum(float(i["amount"]) for i in income_items)

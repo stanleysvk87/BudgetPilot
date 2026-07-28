@@ -19,6 +19,16 @@ for direct public-internet exposure.
   from other devices on your home network (e.g. your phone). Override this
   with `BUDGETPILOT_HOST=127.0.0.1` for localhost-only native use. Docker
   Compose binds the host side to `127.0.0.1` by default.
+- **First-run setup is loopback-only.** Because that default bind exposes a
+  brand-new instance to the whole LAN, and `/auth/setup` cannot require
+  authentication (there is no account yet), whoever reached it first could
+  claim the administrator account and, with it, the household's financial
+  data. Until an administrator exists, `/auth/setup` therefore only answers
+  requests from the machine BudgetPilot runs on; everything else gets a 403
+  explaining where to go. Set `BUDGETPILOT_ALLOW_REMOTE_SETUP=1` if you
+  deliberately want to create that first account from another device, and
+  unset it again afterwards. Once the administrator exists the restriction
+  is irrelevant — `/auth/setup` just redirects to the dashboard.
 - Do **not** port-forward this to the public internet or run it on a
   network you don't fully trust. Login is a useful household/LAN guard, not
   a complete public-internet security model.

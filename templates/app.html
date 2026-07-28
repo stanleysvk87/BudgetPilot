@@ -1103,6 +1103,7 @@ window.BP_EDIT_TARGET = "{% if edit_payment is not none %}edit-form-payment{% el
 <div class="card" id="receipt-review" style="border-color:#7c3aed">
 <h2>📷 Potvrdiť účtenku</h2>
 <div class="small">Odhad z OCR — over si sumu a dátum, priradí sa kategória, a až potom sa uloží ako výdavok.</div>
+{% if receipt_review.error %}<div class="notice-warn">{{receipt_review.error}}</div>{% endif %}
 <img class="receipt-thumb" src="/receipt/image/{{receipt_review.receipt_id}}" alt="Fotka účtenky">
 <form method="post" action="/receipt/confirm">
 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -1124,7 +1125,7 @@ window.BP_EDIT_TARGET = "{% if edit_payment is not none %}edit-form-payment{% el
 <label>Obálka</label>
 <select name="name">{% for t in expense_types %}<option value="{{t}}" {% if t=='Iné' %}selected{% endif %}>{{t}}</option>{% endfor %}</select>
 <label>Poznámka (voliteľné, aj obchod)</label><input name="merchant" value="{{receipt_review.merchant or ''}}" placeholder="napr. Lidl">
-<label>Dátum</label><input name="date" value="{{receipt_review.date or today}}">
+<label>Dátum</label><input type="date" name="date" value="{{receipt_review.date or today}}">
 <div class="btn-row">
 <button>Uložiť výdavok</button>
 <a href="/receipts"><button type="button" class="secondary">Zrušiť</button></a>
@@ -2160,7 +2161,8 @@ aby sa dala v prípade potreby obnoviť ručne.
       envCard.innerHTML =
         '<div class="envelope-card-head">' +
           '<span class="envelope-card-title"><span class="envelope-card-icon">'+envelopeIcon(e.name)+'</span>' +
-          '<span class="envelope-card-name">'+(e.name||"Obálka")+'</span></span>' +
+          /* e.name is stored user data -- set via textContent below. */
+          '<span class="envelope-card-name"></span></span>' +
           '<span class="envelope-card-remaining">'+eur(remaining)+' ostáva</span>' +
         '</div>' +
         '<div class="envelope-progress-bar"><div class="envelope-progress-fill'+(state?" "+state:"")+'" style="width:'+pct+'%"></div></div>' +
@@ -2177,6 +2179,8 @@ aby sa dala v prípade potreby obnoviť ručne.
           '<div><label>Mesačná suma</label><input name="amount" inputmode="decimal" type="number" step="0.01" min="0"></div>' +
           '<div><button type="submit">Uložiť</button></div>' +
         '</form>';
+
+      envCard.querySelector(".envelope-card-name").textContent = e.name || "Obálka";
 
       const editForm = envCard.querySelector(".envelope-edit-row");
       editForm.querySelector('input[name="id"]').value = e.id || "";
@@ -2532,10 +2536,13 @@ aby sa dala v prípade potreby obnoviť ručne.
     if(impact){
       const b = impact.before;
       const a = impact.after;
+      /* Stored payment/envelope names are user data and go in via
+         textContent below, never string-concatenated into innerHTML --
+         same rule buildRow() already follows. */
       overlay.innerHTML =
         '<div class="impact-modal">' +
-          '<h2>'+impact.action_label+'</h2>' +
-          '<div class="impact-modal-sub">'+impact.label+'</div>' +
+          '<h2 class="impact-action-label"></h2>' +
+          '<div class="impact-modal-sub"></div>' +
           '<div class="impact-rows">' +
             row("Stav účtu", b.current_balance, a.current_balance) +
             row("Ešte treba zaplatiť", b.unpaid_payments_total, a.unpaid_payments_total) +
@@ -2547,16 +2554,22 @@ aby sa dala v prípade potreby obnoviť ručne.
             '<button type="button" class="confirm">Potvrdiť</button>' +
           '</div>' +
         '</div>';
+      overlay.querySelector(".impact-action-label").textContent = impact.action_label || "";
+      overlay.querySelector(".impact-modal-sub").textContent = impact.label || "";
     } else {
       overlay.innerHTML =
         '<div class="impact-modal">' +
           '<h2>Potvrdiť akciu</h2>' +
-          '<div class="impact-modal-sub">'+(opts.message || "Nepodarilo sa vypočítať dopad akcie.")+'</div>' +
+          '<div class="impact-modal-sub"></div>' +
           '<div class="impact-modal-actions">' +
             '<button type="button" class="secondary cancel">Zrušiť</button>' +
             '<button type="button" class="confirm">Pokračovať</button>' +
           '</div>' +
         '</div>';
+      /* opts.message embeds the stored payment name (_impact_message) --
+         textContent, not innerHTML. */
+      overlay.querySelector(".impact-modal-sub").textContent =
+        opts.message || "Nepodarilo sa vypočítať dopad akcie.";
     }
 
     overlay.querySelector(".cancel").addEventListener("click", closeModal);

@@ -61,24 +61,42 @@ introduced by this documentation pass.
   `data/users.json` as a password hash. Optional Basic Auth remains for
   compatibility through `BUDGETPILOT_PASSWORD`; see [SECURITY.md](SECURITY.md).
 
-## Concurrency: single Gunicorn worker by design
+## Concurrency: one lock, plus a single Gunicorn worker by default
 
 `json_store.atomic_write_json()` makes each individual write crash-safe (a
 reader never sees a half-written file), but it does not make a
-read-modify-write *cycle* safe across processes: if two Gunicorn workers both
-read `payments.json`, each apply their own change, and then both write, the
-second write silently overwrites the first with no error. There is no
-cross-process locking in `json_store.py` today.
+read-modify-write *cycle* safe: if two requests both read `settings.json`,
+each subtract their own payment, and then both write, the second write
+silently overwrites the first with no error.
 
-Because of this, every shipped deployment path (Docker, systemd,
-`.env.example`) defaults `BUDGETPILOT_WORKERS`/`--workers` to **1**. A single
-worker still runs everything through Gunicorn (timeouts, keep-alive, etc.);
-it just removes the possibility of two workers racing the same JSON file.
-This is a deliberate, documented tradeoff rather than an oversight — see
-`docs/DOCKER.md`. For a single household's interactive usage, one worker has
-no practical throughput impact. Raising the worker count is not safe until
-file locking (e.g. `flock`) is added around the read-modify-write cycle in
-every call site that needs it.
+Defaulting `BUDGETPILOT_WORKERS`/`--workers` to **1** was long documented as
+the mitigation for this. It never was one. Flask's `app.run()` — the mode
+`docs/INSTALL.md` and `desktop_app.py` both use — is `threaded=True` by
+default, and the dashboard fires a background `fetch()` at
+`/api/balance-first-summary` alongside ordinary form POSTs, so requests
+overlap *inside* a single process routinely. A single worker never covered
+that.
+
+`json_store.data_lock()` is the actual fix:
+
+- a re-entrant **thread lock**, which is what closes the real, everyday
+  single-process/threaded case;
+- an **`flock()`** on a lock file (kept in the OS temp dir, keyed by a hash
+  of the data directory, so taking the lock never writes into `data/`),
+  which extends the same guarantee across processes.
+
+`budgetpilot_web.py` holds that lock for the duration of every
+state-changing request (anything that isn't GET/HEAD/OPTIONS), acquired
+after the CSRF check so a rejected request never takes it.
+
+`--workers 1` remains the shipped default — for one household it has no
+practical throughput cost and keeps the lock uncontended — but it is now a
+sizing choice, not a correctness requirement.
+
+Reads are deliberately *not* serialized: each file is replaced atomically,
+so a concurrent reader can at worst see a summary assembled from a
+mid-update mix of files, which self-corrects on the next refresh. Only
+lost updates are permanent, and those are what the lock prevents.
 
 ## Test isolation and the production-data guard
 

@@ -12,6 +12,7 @@ package still works for manual expense entry.
 """
 import re
 from datetime import date
+from functools import lru_cache
 
 SOURCE_MANUAL = "manual"
 SOURCE_OCR = "ocr"
@@ -56,11 +57,16 @@ KIND_LABEL = {
 }
 
 
-def parse_receipt_placeholder(image_path):
+def parse_receipt_placeholder(image_path, error=None):
     """Stand-in for an OCR call — always returns an empty, needs_review
     result. Used directly when OCR is unavailable, and by parse_receipt()
     itself as its fallback on any failure (missing dependency, unreadable
     image, tesseract error).
+
+    `error` carries a short, user-facing reason when there is one. Without
+    it the review form is simply blank, which reads as "the receipt had no
+    readable amount" even when the real cause was "this image format can't
+    be opened at all" — see _register_optional_image_formats().
     """
     return {
         "amount": None,
@@ -70,7 +76,35 @@ def parse_receipt_placeholder(image_path):
         "confidence": 0.0,
         "image_path": image_path,
         "needs_review": True,
+        "error": error,
     }
+
+
+@lru_cache(maxsize=1)
+def _register_optional_image_formats():
+    """Teach Pillow to open HEIF/HEIC images, if pillow-heif is installed.
+
+    `.heic` is the iPhone camera default, and therefore the single most
+    likely format for a photographed receipt — but Pillow has no built-in
+    HEIF decoder, so Image.open() raises, parse_receipt() falls back to
+    the placeholder, and the user gets an empty review form with no
+    explanation. pillow-heif is in requirements.txt for exactly this.
+    Registration stays optional at runtime so an existing installation
+    that hasn't reinstalled dependencies still starts; it just reports the
+    format as unsupported instead of silently returning nothing.
+    """
+    try:
+        import pillow_heif
+    except ImportError:
+        return False
+    try:
+        pillow_heif.register_heif_opener()
+    except Exception:
+        return False
+    return True
+
+
+HEIF_SUFFIXES = {".heic", ".heif"}
 
 
 def _classify_line(line_lower):
@@ -209,6 +243,7 @@ def parse_receipt(image_path):
     except ImportError:
         return parse_receipt_placeholder(image_path)
 
+    heif_ready = _register_optional_image_formats()
     try:
         image = Image.open(image_path)
         # Phone photos carry an EXIF orientation tag rather than physically
@@ -217,7 +252,14 @@ def parse_receipt(image_path):
         # this is applied. Without it, a portrait photo OCRs as garbage.
         image = ImageOps.exif_transpose(image)
     except Exception:
-        return parse_receipt_placeholder(image_path)
+        error = None
+        if not heif_ready and str(image_path).lower().endswith(tuple(HEIF_SUFFIXES)):
+            error = (
+                "Fotku vo formáte HEIC/HEIF sa nepodarilo otvoriť — chýba balík "
+                "pillow-heif. Doinštaluj ho (pip install -r requirements.txt), "
+                "alebo fotku ulož ako JPEG."
+            )
+        return parse_receipt_placeholder(image_path, error=error)
 
     raw_text = None
     for lang in ("slk+eng", "eng"):

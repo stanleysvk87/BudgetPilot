@@ -41,8 +41,19 @@ working either way.
 
 ```bash
 sudo apt install tesseract-ocr tesseract-ocr-slk   # system binary + Slovak language pack
-pip install -r requirements.txt                     # pytesseract, Pillow
+pip install -r requirements.txt                     # pytesseract, Pillow, pillow-heif
 ```
+
+## Image formats
+
+The upload route accepts `.jpg`, `.jpeg`, `.png`, `.webp`, `.heic` and
+`.heif`. Pillow has no built-in HEIF decoder, so `.heic`/`.heif` — the
+iPhone camera default, and therefore the most likely format for a
+photographed receipt — need `pillow-heif`, which `requirements.txt`
+installs and `receipts._register_optional_image_formats()` registers on
+first use. If it isn't installed, the upload still succeeds and the photo
+is still attached to the expense; the review form just opens empty and
+says so, instead of looking like a receipt with no readable amount.
 
 Without this, the web UI's upload form still works, it just won't extract
 anything — the review form opens with empty amount/date fields for you to

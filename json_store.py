@@ -10,15 +10,94 @@ near-identical (and, in several cases, non-atomic) copy of this logic.
 Consolidating them here means every data file gets the same durability
 guarantee on write and the same missing-vs-corrupt handling on read.
 """
+import contextlib
+import hashlib
 import json
 import logging
 import os
+import tempfile
+import threading
 import uuid
 from pathlib import Path
 
 import paths
 
+try:
+    import fcntl
+except ImportError:  # non-POSIX
+    fcntl = None
+
 _log = logging.getLogger(__name__)
+
+
+# ---- Serializing read-modify-write sequences ----
+#
+# atomic_write_json() below makes a single write crash-safe, but it can't
+# make "read balance -> subtract payment -> write balance" safe against a
+# second request doing the same thing at the same time: both read 1000,
+# both write 1000 - amount, and one subtraction is silently lost.
+#
+# Every deployment comment in this project justified skipping locks with
+# "gunicorn runs --workers 1". That never actually covered this: Flask's
+# own app.run() (documented in INSTALL.md/SECURITY.md, and what
+# desktop_app.py uses) is threaded=True by default, and gunicorn's sync
+# worker still interleaves nothing *between* processes but everything the
+# dashboard's background fetch to /api/balance-first-summary does happens
+# concurrently with form POSTs inside one process. So the guarantee has to
+# come from here.
+#
+# Two layers, because both failure modes are real:
+#   - a re-entrant thread lock, which is what actually fixes the default
+#     single-process/threaded deployments;
+#   - an flock() on a lock file, so raising BUDGETPILOT_WORKERS above 1
+#     (or running the CLI next to the server) degrades to serialization
+#     rather than to lost writes.
+#
+# The lock file lives in the OS temp dir, keyed by a hash of the data
+# directory, so acquiring a lock never writes into data/ itself (which
+# would trip paths.guard_against_production_dir() and litter backups).
+_thread_lock = threading.RLock()
+_lock_depth = threading.local()
+
+
+def _lock_file_for(directory) -> Path:
+    key = hashlib.sha256(str(Path(directory).resolve()).encode("utf-8")).hexdigest()[:16]
+    return Path(tempfile.gettempdir()) / f"budgetpilot-data-{key}.lock"
+
+
+@contextlib.contextmanager
+def data_lock(directory=None):
+    """Hold the data-directory write lock for the duration of the block.
+
+    Re-entrant within a thread; blocks other threads and (where flock is
+    available) other processes using the same data directory.
+    """
+    directory = Path(directory) if directory is not None else paths.data_dir()
+    with _thread_lock:
+        depth = getattr(_lock_depth, "value", 0)
+        _lock_depth.value = depth + 1
+        handle = None
+        # Only the outermost acquisition takes the file lock: flock is
+        # per-open-file-description, so a nested acquisition on a second
+        # descriptor would deadlock against this same process.
+        if depth == 0 and fcntl is not None:
+            try:
+                handle = _lock_file_for(directory).open("a+")
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            except OSError as exc:
+                _log.warning("could not take the data file lock: %s", exc)
+                if handle is not None:
+                    handle.close()
+                handle = None
+        try:
+            yield
+        finally:
+            _lock_depth.value = depth
+            if handle is not None:
+                try:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                finally:
+                    handle.close()
 
 
 def read_json(path, default):
